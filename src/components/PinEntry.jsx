@@ -406,7 +406,7 @@ export function PinEntry() {
     }
     checkSingleDay()
     return () => { isMounted = false }
-  }, [retroDayDate, employeeId, isRetroDayOpen, retroMode])
+  }, [retroDayDate, employeeId, step, retroMode])
 
   useEffect(() => {
     db.settings.get('config').then(setSettings)
