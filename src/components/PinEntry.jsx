@@ -7,7 +7,7 @@ import { ptBR } from 'date-fns/locale'
 import html2canvas from 'html2canvas'
 import { QRCodeSVG } from 'qrcode.react'
 import { ThemeToggle } from './ThemeToggle'
-import { toMinutes, checkEmployeeWorkDay } from '../utils/shiftUtils'
+import { toMinutes, checkEmployeeWorkDay, isNationalOrCustomHoliday } from '../utils/shiftUtils'
 import { pushDocToFirestore } from '../firebase'
 import { subscribeAutoPunchStatus } from '../services/autoPunchService'
 import { calculateEmployeeMonthBalance } from '../utils/timeBankUtils'
@@ -19,7 +19,11 @@ const RECORD_TYPES = {
   check_out: { label: 'Saída Definitiva', icon: LogOut, color: 'bg-red-500' },
   other_out: { label: 'Saída Extra', icon: Clock, color: 'bg-purple-500', needsReason: true },
   other_in: { label: 'Retorno Extra', icon: Clock, color: 'bg-indigo-500' },
-  system_auto_checkout: { label: 'Saída Automática', icon: LogOut, color: 'bg-red-500' }
+  system_auto_checkout: { label: 'Saída Automática', icon: LogOut, color: 'bg-red-500' },
+  admin_excused: { label: 'Atestado Médico', icon: FileText, color: 'bg-emerald-500' },
+  admin_abonada: { label: 'Falta Abonada', icon: CheckCircle2, color: 'bg-teal-500' },
+  admin_vacation: { label: 'Férias', icon: Calendar, color: 'bg-cyan-500' },
+  admin_absence: { label: 'Falta Injustificada', icon: AlertCircle, color: 'bg-rose-500' }
 }
 
 export function PinEntry() {
@@ -69,6 +73,7 @@ export function PinEntry() {
   const [retroDayTime, setRetroDayTime] = useState('08:00')
   const [retroDayReason, setRetroDayReason] = useState('')
   const [isSubmittingRetro, setIsSubmittingRetro] = useState(false)
+  const [singleDayRecords, setSingleDayRecords] = useState([])
 
   // Modelo Padrão de Horários para o Período Completo (Lote)
   const [templateIn, setTemplateIn] = useState('08:00')
@@ -201,6 +206,9 @@ export function PinEntry() {
 
       const days = eachDayOfInterval({ start, end })
 
+      // Carrega feriados cadastrados no sistema
+      const holidays = await db.holidays.toArray()
+
       // Carrega registros existentes no período para não gerar pontos duplicados
       const existingRecords = await db.records
         .where('employeeId')
@@ -219,6 +227,7 @@ export function PinEntry() {
 
       const list = days.map(d => {
         const dateStr = format(d, 'yyyy-MM-dd')
+        const holiday = isNationalOrCustomHoliday(dateStr, holidays)
         const dayWork = checkEmployeeWorkDay(emp, d)
         const dayName = format(d, 'EEEE', { locale: ptBR })
         const shortDate = format(d, 'dd/MM')
@@ -234,8 +243,14 @@ export function PinEntry() {
           .map(r => `${RECORD_TYPES[r.type]?.label || r.type} (${format(new Date(r.timestamp), 'HH:mm')})`)
           .join(', ')
 
-        // Seleciona automaticamente dias úteis sem registros já cadastrados
-        const isAutoSelected = dayWork.isWorkDay && existingOnDay.length === 0
+        // Se for feriado: por padrão NÃO é dia de trabalho padrão e NÃO vem selecionado,
+        // mas o colaborador PODE selecionar e lançar caso tenha trabalhado em feriado.
+        const isScheduledWorkDay = dayWork.isWorkDay && !holiday
+        const isAutoSelected = isScheduledWorkDay && existingOnDay.length === 0
+
+        const workDayLabel = holiday
+          ? `Feriado: ${holiday.name}`
+          : (dayWork.label || (dayWork.isWorkDay ? 'Dia Útil' : 'Folga'))
 
         return {
           dateStr,
@@ -243,8 +258,10 @@ export function PinEntry() {
           dayName: dayName.charAt(0).toUpperCase() + dayName.slice(1),
           shortDate,
           fullDateDisplay: format(d, 'dd/MM/yyyy'),
-          isWorkDay: dayWork.isWorkDay,
-          workDayLabel: dayWork.label || (dayWork.isWorkDay ? 'Dia Útil' : 'Folga'),
+          isWorkDay: isScheduledWorkDay,
+          isHoliday: !!holiday,
+          holidayName: holiday?.name || '',
+          workDayLabel,
           existingCount: existingOnDay.length,
           existingSummary,
           selected: isAutoSelected,
@@ -284,7 +301,7 @@ export function PinEntry() {
   }
 
   const handleSelectAllWorkDays = () => {
-    setRetroDaysList(prev => prev.map(d => ({ ...d, selected: d.isWorkDay })))
+    setRetroDaysList(prev => prev.map(d => ({ ...d, selected: d.isWorkDay && !d.isHoliday })))
   }
 
   const handleSelectAllDays = () => {
@@ -351,6 +368,45 @@ export function PinEntry() {
       console.warn('Erro ao carregar banco de horas do colaborador:', err)
     }
   }
+
+  // Efeito inteligente: inspeciona batidas do dia avulso selecionado
+  useEffect(() => {
+    let isMounted = true
+    const checkSingleDay = async () => {
+      if (!retroDayDate || !employeeId) {
+        setSingleDayRecords([])
+        return
+      }
+      try {
+        const records = await db.records
+          .where('employeeId')
+          .equals(Number(employeeId))
+          .toArray()
+        const dayPunches = records.filter(r => {
+          if (r.status === 'rejected') return false
+          const dStr = format(new Date(r.timestamp), 'yyyy-MM-dd')
+          return dStr === retroDayDate
+        })
+        dayPunches.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+        if (isMounted) {
+          setSingleDayRecords(dayPunches)
+          
+          // Se o dia já tem entrada e saída principal (jornada padrão preenchida),
+          // direciona automaticamente para Saída Extra para evitar duplicidade
+          const hasCheckIn = dayPunches.some(r => r.type === 'check_in')
+          const hasCheckOut = dayPunches.some(r => r.type === 'check_out')
+          if (hasCheckIn && hasCheckOut) {
+            setRetroDayType(prev => (prev === 'other_in' || prev === 'other_out' ? prev : 'other_out'))
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao verificar batidas do dia avulso:', err)
+      }
+    }
+    checkSingleDay()
+    return () => { isMounted = false }
+  }, [retroDayDate, employeeId, isRetroDayOpen, retroMode])
 
   useEffect(() => {
     db.settings.get('config').then(setSettings)
@@ -419,7 +475,7 @@ export function PinEntry() {
 
   const handleShareReceipt = async () => {
     if (redirectTimer) clearTimeout(redirectTimer)
-    
+
     const text = `*COMPROVANTE DE PONTO*\n\n🏢 *Empresa:* ${settings?.companyName || 'Empresa'}\n👤 *Funcionário:* ${employee.name}\n📅 *Data:* ${format(recordedTime, 'dd/MM/yyyy')}\n⏰ *Hora do Registro:* ${format(recordedTime, 'HH:mm')}${extraCategory === 'esquecimento' ? `\n🕒 *Chegada Declarada:* ${forgottenTime} (Em análise pelo Administrador)` : ''}\n📝 *Registro:* ${RECORD_TYPES[selectedType].label}\n🔑 *Autenticação:* ${recordedTime.getTime().toString(16).toUpperCase()}`
 
     if (navigator.share) {
@@ -499,10 +555,10 @@ export function PinEntry() {
   const handleGenerateExtract = async () => {
     const [startYear, startMonth, startDay] = startDate.split('-').map(Number)
     const start = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0)
-    
+
     const [endYear, endMonth, endDay] = endDate.split('-').map(Number)
     const end = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999)
-    
+
     const records = await db.records
       .where('employeeId')
       .equals(Number(employeeId))
@@ -511,7 +567,7 @@ export function PinEntry() {
         return d >= start && d <= end
       })
       .toArray()
-      
+
     if (records.length === 0) {
       showFeedback({
         type: 'info',
@@ -520,7 +576,7 @@ export function PinEntry() {
       })
       return
     }
-    
+
     setSelectedTickets(records.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)))
     setShowQR(false)
     setStep('ticket')
@@ -530,13 +586,13 @@ export function PinEntry() {
     if (!records || records.length < 2) return '00:00'
     let totalMs = 0
     let start = null
-    
+
     const sorted = [...records].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-    
+
     sorted.forEach(r => {
       const isEntry = ['check_in', 'lunch_in', 'other_in'].includes(r.type)
       const isExit = ['check_out', 'lunch_out', 'other_out'].includes(r.type)
-      
+
       if (isEntry) {
         if (!start) start = new Date(r.timestamp)
       } else if (isExit && start) {
@@ -547,7 +603,7 @@ export function PinEntry() {
         }
       }
     })
-    
+
     const hours = Math.floor(totalMs / 3600000)
     const minutes = Math.floor((totalMs % 3600000) / 60000)
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}h`
@@ -558,8 +614,8 @@ export function PinEntry() {
       try {
         // Ensure element is fully visible before capture
         const element = ticketRef.current
-        const canvas = await html2canvas(element, { 
-          backgroundColor: '#fef3c7', 
+        const canvas = await html2canvas(element, {
+          backgroundColor: '#fef3c7',
           scale: 3,
           useCORS: true,
           allowTaint: true,
@@ -584,28 +640,28 @@ export function PinEntry() {
   const sendEmail = () => {
     const isSingle = selectedTickets.length === 1
     const subject = isSingle ? `Comprovante de Ponto - ${employee.name}` : `Extrato de Ponto - ${employee.name}`
-    
+
     let body = ''
     if (isSingle) {
       const t = selectedTickets[0]
       const isRejected = t.status === 'rejected'
       body = (isRejected ? `[SOLICITAÇÃO INDEFERIDA - NÃO VÁLIDA COMO PONTO OFICIAL]\nMotivo: ${t.rejectionReason || 'Recusado pela gestão'}\nFavor procurar o setor de Recursos Humanos (RH).\n\n` : '') +
-             `COMPROVANTE DE PONTO\n\n` +
-             `Empresa: ${settings?.companyName || 'Empresa'}\n` +
-             `Funcionário: ${employee.name}\n` +
-             `Data: ${format(new Date(t.timestamp), 'dd/MM/yyyy')}\n` +
-             `Hora: ${format(new Date(t.timestamp), 'HH:mm')}\n` +
-             `Registro: ${RECORD_TYPES[t.type]?.label}\n` +
-             (isRejected ? `Status: INDEFERIDO (RECUSADO)\n` : '') +
-             `Chave: ${new Date(t.timestamp).getTime().toString(16).toUpperCase()}`
+        `COMPROVANTE DE PONTO\n\n` +
+        `Empresa: ${settings?.companyName || 'Empresa'}\n` +
+        `Funcionário: ${employee.name}\n` +
+        `Data: ${format(new Date(t.timestamp), 'dd/MM/yyyy')}\n` +
+        `Hora: ${format(new Date(t.timestamp), 'HH:mm')}\n` +
+        `Registro: ${RECORD_TYPES[t.type]?.label}\n` +
+        (isRejected ? `Status: INDEFERIDO (RECUSADO)\n` : '') +
+        `Chave: ${new Date(t.timestamp).getTime().toString(16).toUpperCase()}`
     } else {
       body = `EXTRATO DE PONTO\n\n` +
-             `Empresa: ${settings?.companyName || 'Empresa'}\n` +
-             `Funcionário: ${employee.name}\n` +
-             `Período: ${format(new Date(startDate), 'dd/MM')} a ${format(new Date(endDate), 'dd/MM')}\n` +
-             `Total Trabalhado: ${calculateTotalHours(selectedTickets)}\n\n` +
-             `Registros:\n` +
-             selectedTickets.map(t => `• ${format(new Date(t.timestamp), 'dd/MM HH:mm')} - ${RECORD_TYPES[t.type]?.label}`).join('\n')
+        `Empresa: ${settings?.companyName || 'Empresa'}\n` +
+        `Funcionário: ${employee.name}\n` +
+        `Período: ${format(new Date(startDate), 'dd/MM')} a ${format(new Date(endDate), 'dd/MM')}\n` +
+        `Total Trabalhado: ${calculateTotalHours(selectedTickets)}\n\n` +
+        `Registros:\n` +
+        selectedTickets.map(t => `• ${format(new Date(t.timestamp), 'dd/MM HH:mm')} - ${RECORD_TYPES[t.type]?.label}`).join('\n')
     }
 
     const mailtoUrl = `mailto:${employee.email || ''}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
@@ -985,7 +1041,7 @@ export function PinEntry() {
     }
 
     const now = simulateTime ? new Date(`${customDate}T${customTime}:00`) : new Date()
-    
+
     // Safety check: Prevent duplicate records within 1 minute
     if (todayRecords.length > 0) {
       const lastRecord = todayRecords[todayRecords.length - 1]
@@ -1026,8 +1082,8 @@ export function PinEntry() {
         timestamp: now.toISOString(),
         systemTimestamp: now.toISOString(),
         declaredTime: isForgotten ? forgottenTime : null,
-        type: selectedType, 
-        comment: isForgotten 
+        type: selectedType,
+        comment: isForgotten
           ? `Ajuste por Esquecimento (Chegada Declarada: ${forgottenTime}) - ${reason || 'Sem observações'}`
           : extraCategory ? { medico: 'Médico', pessoal: 'Pessoal', servico: 'A Serviço' }[extraCategory] : '',
         category: extraCategory,
@@ -1035,7 +1091,7 @@ export function PinEntry() {
       }
       if (locationData) recordData.location = locationData
       if (photoData) recordData.photo = photoData
-      
+
       const recId = await db.records.add(recordData)
       await pushDocToFirestore('records', recId, { ...recordData, id: recId })
 
@@ -1083,7 +1139,7 @@ export function PinEntry() {
         const [h, m] = employee.shiftStart.split(':').map(Number)
         const shiftStart = new Date(now)
         shiftStart.setHours(h, m, 0, 0)
-        
+
         if (now > shiftStart) {
           const diffMin = Math.round((now - shiftStart) / 60000)
           const tolerance = employee.toleranceMin ?? 10
@@ -1116,19 +1172,19 @@ export function PinEntry() {
 
     const getDistance = (lat1, lon1, lat2, lon2) => {
       const R = 6371e3;
-      const f1 = lat1 * Math.PI/180;
-      const f2 = lat2 * Math.PI/180;
-      const df = (lat2-lat1) * Math.PI/180;
-      const dl = (lon2-lon1) * Math.PI/180;
-      const a = Math.sin(df/2) * Math.sin(df/2) + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2) * Math.sin(dl/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      const f1 = lat1 * Math.PI / 180;
+      const f2 = lat2 * Math.PI / 180;
+      const df = (lat2 - lat1) * Math.PI / 180;
+      const dl = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(df / 2) * Math.sin(df / 2) + Math.cos(f1) * Math.cos(f2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       return R * c;
     }
 
     const handleGeolocation = (pos) => {
       const userLat = pos.coords.latitude
       const userLng = pos.coords.longitude
-      
+
       if (settings?.geofenceEnabled && settings.geofenceLat && settings.geofenceLng) {
         const dist = getDistance(userLat, userLng, parseFloat(settings.geofenceLat), parseFloat(settings.geofenceLng))
         if (dist > (parseFloat(settings.geofenceRadius) || 50)) {
@@ -1193,7 +1249,7 @@ export function PinEntry() {
 
     // If already has a check_in, you can't check_in again
     if (type === 'check_in' && hasCheckIn) return true
-    
+
     // Only 1 lunch per day allowed
     if (type === 'lunch_out' && hasLunchOut) return true
 
@@ -1204,23 +1260,23 @@ export function PinEntry() {
       case 'check_in':
         // After entry: Lunch out, Final exit, or Extra exit
         return !['lunch_out', 'check_out', 'other_out'].includes(type)
-      
+
       case 'lunch_out':
         // During lunch: Only Lunch in allowed
         return type !== 'lunch_in'
-      
+
       case 'lunch_in':
         // After returning from lunch: Final exit, Extra exit
         return !['check_out', 'other_out'].includes(type)
-      
+
       case 'other_out':
         // During extra exit: Only Extra in allowed
         return type !== 'other_in'
-      
+
       case 'other_in':
         // After returning from extra exit: Any exit allowed
         return !['lunch_out', 'check_out', 'other_out'].includes(type)
-      
+
       default:
         return false
     }
@@ -1234,18 +1290,18 @@ export function PinEntry() {
     if (lastType === 'check_in' || lastType === 'other_in' || lastType === 'lunch_in') {
       const now = new Date()
       const nowMin = now.getHours() * 60 + now.getMinutes()
-      
+
       const lunchStartMin = employee?.lunchStart ? toMinutes(employee.lunchStart) : (12 * 60)
       const lunchEndMin = employee?.lunchEnd ? toMinutes(employee.lunchEnd) : (13 * 60)
       const shiftEndMin = employee?.shiftEnd ? toMinutes(employee.shiftEnd) : (17 * 60)
-      
+
       const hasLunchOut = todayRecords.some(r => r.type === 'lunch_out')
-      
+
       // Se ainda não saiu para almoço e está na janela do horário de almoço do colaborador
       if (!hasLunchOut && nowMin >= (lunchStartMin - 45) && nowMin < lunchEndMin) {
         return 'lunch_out'
       }
-      
+
       // Se está próximo ou já passou do horário de saída definitiva do colaborador
       if (nowMin >= (shiftEndMin - 45)) {
         return 'check_out'
@@ -1257,7 +1313,7 @@ export function PinEntry() {
   if (!employee) return null
 
   return (
-    <div 
+    <div
       className="relative flex flex-col items-center justify-center min-h-screen p-4 sm:p-6 overflow-hidden bg-slate-50 dark:bg-[#090D16] text-slate-900 dark:text-white transition-colors duration-500"
       onClick={handleContainerClick}
     >
@@ -1265,7 +1321,7 @@ export function PinEntry() {
       <div className="pointer-events-none absolute top-[-10%] right-[-10%] w-[450px] h-[450px] bg-blue-500/10 dark:bg-blue-600/15 rounded-full blur-[120px]" />
       <div className="pointer-events-none absolute bottom-[-10%] left-[-10%] w-[450px] h-[450px] bg-indigo-500/10 dark:bg-indigo-600/15 rounded-full blur-[120px]" />
 
-      <button 
+      <button
         onClick={(e) => {
           e.stopPropagation()
           navigate({ to: '/' })
@@ -1293,7 +1349,7 @@ export function PinEntry() {
             onKeyDown={handleKeyDown}
             className="absolute top-0 left-0 w-px h-px opacity-0 overflow-hidden"
           />
-          
+
           <div className="glass-panel p-8 rounded-[2.5rem] shadow-2xl space-y-6 border border-slate-200/80 dark:border-white/10">
             <div className="space-y-3">
               <div className="w-24 h-24 mx-auto rounded-3xl bg-gradient-to-tr from-blue-600/20 to-indigo-600/20 flex items-center justify-center border-2 border-blue-500/30 overflow-hidden shadow-lg p-0.5">
@@ -1307,14 +1363,13 @@ export function PinEntry() {
                 <h2 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">{employee.name}</h2>
                 <p className="text-xs text-slate-400 dark:text-slate-400 mt-0.5 font-medium">Digite seu PIN de 4 dígitos</p>
                 {employee.autoPunchEnabled && (
-                  <div className={`mt-3 px-3 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider inline-flex items-center space-x-1.5 ${
-                    autoPunchTelemetry?.isInside 
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400' 
+                  <div className={`mt-3 px-3 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider inline-flex items-center space-x-1.5 ${autoPunchTelemetry?.isInside
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                       : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
-                  }`}>
+                    }`}>
                     <MapPin className="w-3 h-3 shrink-0 animate-pulse" />
                     <span>
-                      {autoPunchTelemetry 
+                      {autoPunchTelemetry
                         ? `${autoPunchTelemetry.isInside ? 'Na Sala' : 'Fora'} (${autoPunchTelemetry.distance}m)`
                         : 'Auto-Ponto por Presença Ativo'}
                     </span>
@@ -1328,13 +1383,12 @@ export function PinEntry() {
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className={`w-4 h-4 rounded-full transition-all duration-300 ${
-                    pin.length > i 
-                      ? 'bg-blue-600 border-2 border-blue-400 shadow-md shadow-blue-500/40 scale-125' 
-                      : error 
-                        ? 'border-2 border-red-500 bg-red-500/20 animate-pulse' 
+                  className={`w-4 h-4 rounded-full transition-all duration-300 ${pin.length > i
+                      ? 'bg-blue-600 border-2 border-blue-400 shadow-md shadow-blue-500/40 scale-125'
+                      : error
+                        ? 'border-2 border-red-500 bg-red-500/20 animate-pulse'
                         : 'border-2 border-slate-300 dark:border-slate-700 bg-slate-200/50 dark:bg-white/5'
-                  }`}
+                    }`}
                 />
               ))}
             </div>
@@ -1366,11 +1420,10 @@ export function PinEntry() {
               <button
                 onClick={(e) => { e.stopPropagation(); handlePinSubmit() }}
                 disabled={pin.length < 4}
-                className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${
-                  pin.length === 4 
-                    ? 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/30 hover:scale-105' 
+                className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${pin.length === 4
+                    ? 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/30 hover:scale-105'
                     : 'text-slate-300 dark:text-slate-700 bg-slate-100 dark:bg-white/5 cursor-not-allowed'
-                }`}
+                  }`}
                 title="Confirmar"
               >
                 <Check className="w-7 h-7" />
@@ -1410,11 +1463,10 @@ export function PinEntry() {
                     • {todayRecords.length} registro(s) hoje
                   </span>
                   {employee.autoPunchEnabled && (
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border shrink-0 ${
-                      autoPunchTelemetry?.isInside 
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400' 
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border shrink-0 ${autoPunchTelemetry?.isInside
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                         : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
-                    }`}>
+                      }`}>
                       <MapPin className="w-2.5 h-2.5 shrink-0 animate-pulse" />
                       <span>{autoPunchTelemetry ? `${autoPunchTelemetry.isInside ? 'Na Sala' : 'Fora'} (${autoPunchTelemetry.distance}m)` : 'Auto-Ponto Ativo'}</span>
                     </span>
@@ -1445,25 +1497,22 @@ export function PinEntry() {
           {employeeNotifications.filter(n => !n.read).length > 0 && (
             <div className="space-y-3">
               {employeeNotifications.filter(n => !n.read).map(notif => (
-                <div 
+                <div
                   key={notif.id}
-                  className={`p-6 rounded-3xl border-2 shadow-xl space-y-4 animate-in slide-in-from-top-3 ${
-                    notif.type === 'request_rejected' 
-                      ? 'bg-red-50 dark:bg-[#1a0b0e] border-red-300 dark:border-red-500/40 shadow-red-500/10' 
+                  className={`p-6 rounded-3xl border-2 shadow-xl space-y-4 animate-in slide-in-from-top-3 ${notif.type === 'request_rejected'
+                      ? 'bg-red-50 dark:bg-[#1a0b0e] border-red-300 dark:border-red-500/40 shadow-red-500/10'
                       : 'bg-emerald-50 dark:bg-[#091a12] border-emerald-300 dark:border-emerald-500/40 shadow-emerald-500/10'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-start space-x-4">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 text-white shadow-lg mt-0.5 ${
-                      notif.type === 'request_rejected' ? 'bg-red-600 shadow-red-600/30' : 'bg-emerald-600 shadow-emerald-600/30'
-                    }`}>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 text-white shadow-lg mt-0.5 ${notif.type === 'request_rejected' ? 'bg-red-600 shadow-red-600/30' : 'bg-emerald-600 shadow-emerald-600/30'
+                      }`}>
                       {notif.type === 'request_rejected' ? <ShieldAlert className="w-6 h-6" /> : <CheckCircle2 className="w-6 h-6" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h4 className={`font-black text-sm uppercase tracking-wide ${
-                          notif.type === 'request_rejected' ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'
-                        }`}>
+                        <h4 className={`font-black text-sm uppercase tracking-wide ${notif.type === 'request_rejected' ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'
+                          }`}>
                           {notif.title || (notif.type === 'request_rejected' ? 'Solicitação Indeferida' : 'Solicitação Deferida')}
                         </h4>
                         {notif.type === 'request_rejected' && (
@@ -1494,7 +1543,7 @@ export function PinEntry() {
                     >
                       Marcar como Ciente
                     </button>
-                    
+
                     {notif.recordId && (
                       <button
                         type="button"
@@ -1519,11 +1568,11 @@ export function PinEntry() {
 
           {/* Modal com Histórico Completo de Notificações */}
           {showEmployeeNotifsModal && (
-            <div 
+            <div
               className="fixed inset-0 z-[150] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
               onClick={() => setShowEmployeeNotifsModal(false)}
             >
-              <div 
+              <div
                 className="relative max-w-lg w-full bg-white dark:bg-slate-900 rounded-[2.5rem] p-7 border border-slate-200 dark:border-white/10 shadow-2xl space-y-5 animate-in zoom-in duration-200 max-h-[85vh] flex flex-col"
                 onClick={e => e.stopPropagation()}
               >
@@ -1547,11 +1596,10 @@ export function PinEntry() {
                     <p className="text-center py-8 text-xs text-slate-400 font-medium">Nenhuma notificação registrada.</p>
                   ) : (
                     employeeNotifications.map(n => (
-                      <div 
-                        key={n.id} 
-                        className={`p-4 rounded-2xl border text-xs space-y-2 ${
-                          n.type === 'request_rejected' ? 'bg-red-500/5 border-red-500/20 text-red-900 dark:text-red-200' : 'bg-emerald-500/5 border-emerald-500/20 text-emerald-900 dark:text-emerald-200'
-                        }`}
+                      <div
+                        key={n.id}
+                        className={`p-4 rounded-2xl border text-xs space-y-2 ${n.type === 'request_rejected' ? 'bg-red-500/5 border-red-500/20 text-red-900 dark:text-red-200' : 'bg-emerald-500/5 border-emerald-500/20 text-emerald-900 dark:text-emerald-200'
+                          }`}
                       >
                         <div className="flex justify-between items-start">
                           <span className={`font-black uppercase text-[10px] ${n.type === 'request_rejected' ? 'text-red-600' : 'text-emerald-600'}`}>
@@ -1590,7 +1638,7 @@ export function PinEntry() {
                     <p className="text-[10px] text-orange-600 font-black uppercase tracking-widest">Modo Simulação Ativo</p>
                   </div>
                 </div>
-                <button 
+                <button
                   onClick={() => setSimulateTime(!simulateTime)}
                   className={`w-12 h-6 rounded-full transition-all relative ${simulateTime ? 'bg-orange-500' : 'bg-slate-300 dark:bg-slate-800'}`}
                 >
@@ -1616,18 +1664,16 @@ export function PinEntry() {
 
           {/* Card de Banco de Horas em Tempo Real */}
           {timeBank && (
-            <div className={`p-6 rounded-[2rem] border transition-all shadow-lg space-y-4 ${
-              timeBank.status === 'credit'
+            <div className={`p-6 rounded-[2rem] border transition-all shadow-lg space-y-4 ${timeBank.status === 'credit'
                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100 shadow-emerald-500/5'
                 : timeBank.status === 'debt'
                   ? 'bg-red-500/10 border-red-500/30 text-red-950 dark:text-red-100 shadow-red-500/5'
                   : 'bg-blue-500/10 border-blue-500/30 text-blue-950 dark:text-blue-100 shadow-blue-500/5'
-            }`}>
+              }`}>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center space-x-3.5">
-                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-white shadow-md shrink-0 ${
-                    timeBank.status === 'credit' ? 'bg-emerald-600 shadow-emerald-600/30' : timeBank.status === 'debt' ? 'bg-red-600 shadow-red-600/30' : 'bg-blue-600 shadow-blue-600/30'
-                  }`}>
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-white shadow-md shrink-0 ${timeBank.status === 'credit' ? 'bg-emerald-600 shadow-emerald-600/30' : timeBank.status === 'debt' ? 'bg-red-600 shadow-red-600/30' : 'bg-blue-600 shadow-blue-600/30'
+                    }`}>
                     <Scale className="w-5 h-5" />
                   </div>
                   <div>
@@ -1653,19 +1699,18 @@ export function PinEntry() {
                 </div>
 
                 <div className="text-right shrink-0">
-                  <span className={`px-3.5 py-1.5 rounded-2xl text-xs font-black font-mono inline-block tracking-tight ${
-                    timeBank.status === 'credit'
+                  <span className={`px-3.5 py-1.5 rounded-2xl text-xs font-black font-mono inline-block tracking-tight ${timeBank.status === 'credit'
                       ? 'bg-emerald-500 text-white shadow-sm'
                       : timeBank.status === 'debt'
                         ? 'bg-red-500 text-white shadow-sm'
                         : 'bg-blue-500 text-white shadow-sm'
-                  }`}>
+                    }`}>
                     {timeBank.balanceFormatted}
                   </span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2.5 pt-3 border-t border-black/5 dark:border-white/10 text-center">
+              <div className={`grid ${timeBank.totalExcusedMin > 0 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-2.5 pt-3 border-t border-black/5 dark:border-white/10 text-center`}>
                 <div className="p-3 rounded-2xl bg-white/60 dark:bg-black/30 border border-black/5 dark:border-white/5">
                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Previsto (CLT)</span>
                   <span className="text-xs font-black text-slate-800 dark:text-slate-200 font-mono mt-0.5 block">{timeBank.expectedFormatted}</span>
@@ -1674,13 +1719,18 @@ export function PinEntry() {
                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Trabalhado</span>
                   <span className="text-xs font-black text-slate-800 dark:text-slate-200 font-mono mt-0.5 block">{timeBank.workedFormatted}</span>
                 </div>
+                {timeBank.totalExcusedMin > 0 && (
+                  <div className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/20">
+                    <span className="text-[9px] font-black text-teal-600 dark:text-teal-400 uppercase tracking-widest block">Abonado</span>
+                    <span className="text-xs font-black text-teal-700 dark:text-teal-300 font-mono mt-0.5 block">+{timeBank.excusedFormatted}</span>
+                  </div>
+                )}
                 <div className="p-3 rounded-2xl bg-white/60 dark:bg-black/30 border border-black/5 dark:border-white/5">
                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">
                     {timeBank.status === 'credit' ? 'Horas Extras' : timeBank.status === 'debt' ? 'Devendo' : 'Saldo'}
                   </span>
-                  <span className={`text-xs font-black font-mono mt-0.5 block ${
-                    timeBank.status === 'credit' ? 'text-emerald-600 dark:text-emerald-400' : timeBank.status === 'debt' ? 'text-red-600 dark:text-red-400' : 'text-blue-600 dark:text-blue-400'
-                  }`}>
+                  <span className={`text-xs font-black font-mono mt-0.5 block ${timeBank.status === 'credit' ? 'text-emerald-600 dark:text-emerald-400' : timeBank.status === 'debt' ? 'text-red-600 dark:text-red-400' : 'text-blue-600 dark:text-blue-400'
+                    }`}>
                     {timeBank.status === 'credit' ? `+${timeBank.overtimeFormatted}` : timeBank.status === 'debt' ? `-${timeBank.debtFormatted}` : '0h 00m'}
                   </span>
                 </div>
@@ -1822,15 +1872,14 @@ export function PinEntry() {
                   <button
                     disabled={disabled}
                     onClick={() => handleRecord(key)}
-                    className={`w-full p-4 rounded-2xl border transition-all flex items-center justify-between group active:scale-[0.98] ${
-                      disabled 
-                        ? 'opacity-35 grayscale cursor-not-allowed bg-slate-100/50 dark:bg-slate-900/30 border-slate-200/50 dark:border-white/5' 
-                        : isSelected 
-                          ? 'glass-card border-blue-500/80 ring-2 ring-blue-500/40 shadow-lg shadow-blue-500/10' 
+                    className={`w-full p-4 rounded-2xl border transition-all flex items-center justify-between group active:scale-[0.98] ${disabled
+                        ? 'opacity-35 grayscale cursor-not-allowed bg-slate-100/50 dark:bg-slate-900/30 border-slate-200/50 dark:border-white/5'
+                        : isSelected
+                          ? 'glass-card border-blue-500/80 ring-2 ring-blue-500/40 shadow-lg shadow-blue-500/10'
                           : isSuggested
                             ? 'bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/15 shadow-md shadow-blue-500/10'
                             : 'glass-card border-slate-200/80 dark:border-white/5 hover:border-slate-300 dark:hover:border-white/20'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center space-x-3.5">
                       <div className={`w-12 h-12 rounded-xl ${disabled ? 'bg-slate-400 dark:bg-slate-800 text-slate-500' : config.color} text-white flex items-center justify-center shadow-md transition-transform group-hover:scale-105 shrink-0`}>
@@ -1854,14 +1903,14 @@ export function PinEntry() {
                       </div>
                     )}
                   </button>
-                  
+
                   {isSelected && config.needsReason && (
                     <div className="p-4 bg-black/5 dark:bg-white/5 rounded-2xl border border-blue-500/30 space-y-4 animate-in fade-in slide-in-from-top-2">
                       <p className="text-xs font-black text-blue-500 uppercase tracking-widest flex items-center justify-center">
                         <AlertCircle className="w-4 h-4 mr-2" />
                         Selecione o tipo de saída
                       </p>
-                      
+
                       <div className="grid grid-cols-1 gap-2">
                         {[
                           { id: 'medico', label: 'Médico', icon: Activity, desc: 'Pendente de Atestado' },
@@ -1956,11 +2005,11 @@ export function PinEntry() {
           </div>
 
           <div className="relative mx-auto w-64 h-64 rounded-full overflow-hidden border-4 border-blue-500/30 shadow-2xl shadow-blue-500/20">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
               className="w-full h-full object-cover scale-x-[-1]"
             />
             <div className="absolute inset-0 border-4 border-blue-500 rounded-full opacity-50" />
@@ -1973,7 +2022,7 @@ export function PinEntry() {
           >
             Capturar e Confirmar
           </button>
-          
+
           <button
             onClick={() => setStep('select')}
             className="w-full py-3 text-slate-500 hover:text-slate-900 dark:text-white text-xs font-bold uppercase tracking-widest transition-colors"
@@ -2014,7 +2063,7 @@ export function PinEntry() {
           {/* Mini Wallet Pass Card */}
           <div className="glass-panel p-6 rounded-3xl border border-slate-200/80 dark:border-white/10 shadow-xl text-left space-y-4 relative overflow-hidden">
             <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500" />
-            
+
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Tipo de Registro</p>
@@ -2059,7 +2108,7 @@ export function PinEntry() {
               <Share2 className="w-4 h-4" />
               <span>Ver Comprovante Digital (Ticket)</span>
             </button>
-            
+
             <button
               onClick={() => navigate({ to: '/' })}
               className="w-full py-3 glass-card rounded-2xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white text-xs font-bold uppercase tracking-wider transition-all active:scale-[0.98]"
@@ -2077,7 +2126,7 @@ export function PinEntry() {
 
       {step === 'day_correction' && (
         <div className="w-full max-w-3xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
-          <button 
+          <button
             type="button"
             onClick={() => setStep('select')}
             className="flex items-center space-x-2 text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors text-sm font-bold"
@@ -2237,7 +2286,7 @@ export function PinEntry() {
 
       {step === 'retroactive_day' && (
         <div className="w-full max-w-3xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
-          <button 
+          <button
             onClick={() => setStep('select')}
             className="flex items-center space-x-2 text-slate-500 hover:text-slate-900 dark:text-white transition-colors text-sm font-bold"
           >
@@ -2265,11 +2314,10 @@ export function PinEntry() {
                 setRetroMode('batch')
                 if (retroDaysList.length === 0) initRetroDays(employee)
               }}
-              className={`py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${
-                retroMode === 'batch'
+              className={`py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${retroMode === 'batch'
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
+                }`}
             >
               <Sparkles className="w-4 h-4" />
               <span>Período Completo</span>
@@ -2277,11 +2325,10 @@ export function PinEntry() {
             <button
               type="button"
               onClick={() => setRetroMode('single')}
-              className={`py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${
-                retroMode === 'single'
+              className={`py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${retroMode === 'single'
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
+                }`}
             >
               <Clock className="w-4 h-4" />
               <span>Ponto Avulso</span>
@@ -2446,11 +2493,10 @@ export function PinEntry() {
                     {retroDaysList.map(day => (
                       <div
                         key={day.dateStr}
-                        className={`p-4 md:p-5 rounded-2xl border transition-all ${
-                          day.selected
+                        className={`p-4 md:p-5 rounded-2xl border transition-all ${day.selected
                             ? 'bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-500/30 shadow-sm'
                             : 'bg-slate-50/50 dark:bg-black/20 border-black/5 dark:border-white/5 opacity-70'
-                        }`}
+                          }`}
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <label className="flex items-center space-x-3 cursor-pointer select-none">
@@ -2469,14 +2515,21 @@ export function PinEntry() {
                                   • {day.dayName}
                                 </span>
                               </div>
-                              <div className="flex items-center space-x-2 mt-0.5">
+                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                                 <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
-                                  day.isWorkDay
+                                  day.isHoliday
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30'
+                                    : day.isWorkDay
                                     ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                                     : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
                                 }`}>
                                   {day.workDayLabel}
                                 </span>
+                                {day.isHoliday && day.selected && (
+                                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-500/30">
+                                    ⭐ Trabalho em Feriado (100% / Escala)
+                                  </span>
+                                )}
                                 {day.existingCount > 0 && (
                                   <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
                                     ⚠️ {day.existingCount} ponto(s) existente(s)
@@ -2564,7 +2617,7 @@ export function PinEntry() {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">
                     Justificativa Geral do Período
                   </label>
-                  <textarea 
+                  <textarea
                     rows="3"
                     placeholder="Ex: Registro manual em folha física no início das atividades / regularização retroativa autorizada pela gestão..."
                     className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-2xl text-slate-900 dark:text-white font-medium text-sm outline-none focus:ring-2 focus:ring-indigo-500 placeholder:text-slate-400"
@@ -2585,7 +2638,7 @@ export function PinEntry() {
                   </span>
                 </div>
 
-                <button 
+                <button
                   type="button"
                   onClick={handleSaveRetroBatch}
                   disabled={isSubmittingRetroBatch || retroDaysList.filter(d => d.selected).length === 0}
@@ -2593,8 +2646,8 @@ export function PinEntry() {
                 >
                   <Sparkles className="w-4 h-4" />
                   <span>
-                    {isSubmittingRetroBatch 
-                      ? 'Enviando Lote para Aprovação...' 
+                    {isSubmittingRetroBatch
+                      ? 'Enviando Lote para Aprovação...'
                       : `Enviar Período Completo (${retroDaysList.filter(d => d.selected).reduce((acc, d) => acc + (d.hasLunch ? 4 : 2), 0)} Batidas)`}
                   </span>
                 </button>
@@ -2604,8 +2657,8 @@ export function PinEntry() {
             <form onSubmit={handleSaveRetroDay} className="p-8 bg-white dark:bg-slate-900 rounded-3xl border border-black/10 dark:border-white/10 space-y-6 shadow-xl max-w-lg mx-auto">
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">Data do Ponto</label>
-                <input 
-                  type="date" 
+                <input
+                  type="date"
                   min={employee?.retroactiveStart || undefined}
                   max={employee?.retroactiveEnd || undefined}
                   required
@@ -2615,26 +2668,58 @@ export function PinEntry() {
                 />
               </div>
 
+              {/* Feedback inteligente quando o dia já possui a jornada principal registrada */}
+              {singleDayRecords.some(r => r.type === 'check_in') && singleDayRecords.some(r => r.type === 'check_out') ? (
+                <div className="p-4 bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-500/20 rounded-2xl space-y-2">
+                  <div className="flex items-center space-x-2 text-indigo-900 dark:text-indigo-200">
+                    <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <span className="font-black text-xs uppercase tracking-tight">Jornada Principal Já Registrada</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                    Este dia já possui entrada e saída principal:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {singleDayRecords.map(r => (
+                      <span key={r.id || r.timestamp} className="px-2 py-0.5 bg-indigo-100 dark:bg-white/10 text-indigo-900 dark:text-indigo-200 rounded-md text-[10px] font-bold">
+                        {RECORD_TYPES[r.type]?.label || r.type}: {format(new Date(r.timestamp), 'HH:mm')}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold pt-1">
+                    Liberado exclusivamente para lançamento de <strong>Saída Extra</strong> e <strong>Retorno Extra</strong> (pausas/ausências intermediárias).
+                  </p>
+                </div>
+              ) : null}
+
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">Tipo de Marcação</label>
-                <select 
-                  value={retroDayType} 
+                <select
+                  value={retroDayType}
                   onChange={e => setRetroDayType(e.target.value)}
                   className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-2xl text-slate-900 dark:text-white font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="check_in">Entrada Principal</option>
-                  <option value="lunch_out">Saída Refeição (Almoço)</option>
-                  <option value="lunch_in">Retorno Refeição (Almoço)</option>
-                  <option value="check_out">Saída Definitiva</option>
-                  <option value="other_in">Retorno Extra</option>
-                  <option value="other_out">Saída Extra</option>
+                  {singleDayRecords.some(r => r.type === 'check_in') && singleDayRecords.some(r => r.type === 'check_out') ? (
+                    <>
+                      <option value="other_out">Saída Extra (Ausência Intermediária)</option>
+                      <option value="other_in">Retorno Extra (Retorno da Ausência)</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="check_in">Entrada Principal</option>
+                      <option value="lunch_out">Saída Refeição (Almoço)</option>
+                      <option value="lunch_in">Retorno Refeição (Almoço)</option>
+                      <option value="check_out">Saída Definitiva</option>
+                      <option value="other_out">Saída Extra</option>
+                      <option value="other_in">Retorno Extra</option>
+                    </>
+                  )}
                 </select>
               </div>
 
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">Horário Real em que Ocorreu</label>
-                <input 
-                  type="time" 
+                <input
+                  type="time"
                   required
                   className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-2xl text-slate-900 dark:text-white font-black text-xl text-center outline-none focus:ring-2 focus:ring-indigo-500"
                   value={retroDayTime}
@@ -2644,7 +2729,7 @@ export function PinEntry() {
 
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">Justificativa / Motivo</label>
-                <textarea 
+                <textarea
                   rows="3"
                   placeholder="Ex: Registro manual em folha física no início das atividades na empresa..."
                   className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-2xl text-slate-900 dark:text-white font-medium text-sm outline-none focus:ring-2 focus:ring-indigo-500 placeholder:text-slate-400"
@@ -2653,8 +2738,8 @@ export function PinEntry() {
                 />
               </div>
 
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={isSubmittingRetro}
                 className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-2xl shadow-xl shadow-indigo-600/30 transition-all active:scale-[0.98] uppercase tracking-widest text-xs flex items-center justify-center space-x-2 disabled:opacity-50"
               >
@@ -2673,27 +2758,28 @@ export function PinEntry() {
           </div>
 
           {timeBank && (
-            <div className={`p-5 rounded-3xl border shadow-lg space-y-3 ${
-              timeBank.status === 'credit'
+            <div className={`p-5 rounded-3xl border shadow-lg space-y-3 ${timeBank.status === 'credit'
                 ? 'bg-emerald-500/10 border-emerald-500/30'
                 : timeBank.status === 'debt'
                   ? 'bg-red-500/10 border-red-500/30'
                   : 'bg-blue-500/10 border-blue-500/30'
-            }`}>
+              }`}>
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Banco de Horas (Mês Atual)</span>
-                <span className={`px-2.5 py-0.5 rounded-lg text-xs font-black font-mono ${
-                  timeBank.status === 'credit'
+                <span className={`px-2.5 py-0.5 rounded-lg text-xs font-black font-mono ${timeBank.status === 'credit'
                     ? 'bg-emerald-500 text-white'
                     : timeBank.status === 'debt'
                       ? 'bg-red-500 text-white'
                       : 'bg-blue-500 text-white'
-                }`}>
+                  }`}>
                   {timeBank.balanceFormatted}
                 </span>
               </div>
-              <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+              <div className="flex flex-wrap justify-between gap-2 text-xs font-bold text-slate-700 dark:text-slate-300">
                 <span>Trabalhadas: <b className="font-mono text-slate-900 dark:text-white">{timeBank.workedFormatted}</b></span>
+                {timeBank.totalExcusedMin > 0 && (
+                  <span className="text-teal-600 dark:text-teal-400">Abonadas: <b className="font-mono">+{timeBank.excusedFormatted}</b></span>
+                )}
                 <span>Previstas: <b className="font-mono text-slate-900 dark:text-white">{timeBank.expectedFormatted}</b></span>
               </div>
             </div>
@@ -2735,21 +2821,20 @@ export function PinEntry() {
                     >
                       <div className="flex flex-col">
                         <span className="font-bold text-slate-900 dark:text-white text-sm">{RECORD_TYPES[r.type]?.label}</span>
-                          <div className="flex items-center space-x-2">
-                            <span className="text-xs text-slate-500">{format(new Date(r.timestamp), 'dd/MM/yyyy')}</span>
-                            {r.comment && (
-                              <span className="text-[10px] text-blue-500 italic truncate max-w-[120px] font-medium">({r.comment})</span>
-                            )}
-                            {['medico', 'esquecimento', 'retroactive_day'].includes(r.category) && (
-                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${
-                                r.status === 'pending' ? 'bg-orange-500/20 text-orange-500' :
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs text-slate-500">{format(new Date(r.timestamp), 'dd/MM/yyyy')}</span>
+                          {r.comment && (
+                            <span className="text-[10px] text-blue-500 italic truncate max-w-[120px] font-medium">({r.comment})</span>
+                          )}
+                          {['medico', 'esquecimento', 'retroactive_day'].includes(r.category) && (
+                            <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${r.status === 'pending' ? 'bg-orange-500/20 text-orange-500' :
                                 r.status === 'approved' ? 'bg-emerald-500/20 text-emerald-500' :
-                                'bg-red-500/20 text-red-500'
+                                  'bg-red-500/20 text-red-500'
                               }`}>
-                                {r.status === 'pending' ? 'Pendente' : r.status === 'approved' ? 'Deferido' : 'Indeferido'}
-                              </span>
-                            )}
-                          </div>
+                              {r.status === 'pending' ? 'Pendente' : r.status === 'approved' ? 'Deferido' : 'Indeferido'}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center space-x-3">
                         <span className="font-mono text-blue-500 font-bold">{format(new Date(r.timestamp), 'HH:mm')}</span>
@@ -2773,7 +2858,7 @@ export function PinEntry() {
 
       {step === 'ticket' && selectedTickets && selectedTickets.length > 0 && (
         <div className="w-full max-w-sm flex flex-col items-center space-y-6 animate-in slide-in-from-bottom-8 duration-500 pb-10">
-          <div 
+          <div
             ref={ticketRef}
             className="w-72 bg-[#fef3c7] text-[#1e293b] p-6 shadow-2xl relative overflow-hidden"
             style={{ fontFamily: '"Courier New", Courier, monospace', borderTop: '4px dashed #cbd5e1', borderBottom: '4px dashed #cbd5e1' }}
@@ -2794,13 +2879,13 @@ export function PinEntry() {
               <h2 className="font-black text-lg tracking-tight uppercase leading-tight">{settings?.companyName || 'Empresa'}</h2>
               <p className="text-[10px] font-bold">{selectedTickets.length > 1 ? 'EXTRATO DE PONTO' : 'COMPROVANTE DE PONTO'}</p>
             </div>
-            
+
             <div className="space-y-4 text-sm font-bold">
               <div>
                 <p className="text-[#64748b] text-[10px] uppercase">Funcionário</p>
                 <p className="truncate">{employee.name}</p>
               </div>
-              
+
               {selectedTickets.length === 1 ? (
                 <>
                   <div className="flex justify-between">
@@ -2843,39 +2928,39 @@ export function PinEntry() {
                   </div>
                 </>
               ) : (
-                  <div className="space-y-3">
-                    <div className="flex justify-between border-b border-dashed border-[#94a3b8] pb-1">
-                      <p className="text-[#64748b] text-[10px] uppercase">Período</p>
-                      <p className="text-xs">{format(new Date(startDate), 'dd/MM/yyyy')} a {format(new Date(endDate), 'dd/MM/yyyy')}</p>
-                    </div>
-                    <div className="space-y-2">
-                      {selectedTickets.map((t, i) => (
-                        <div key={i} className="flex justify-between items-start text-xs border-b border-[#cbd5e1]/50 pb-1 py-1">
-                          <div className="flex flex-col text-left">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-[#64748b] text-[9px]">{format(new Date(t.timestamp), 'dd/MM')}</span>
-                              <span className="font-bold">{RECORD_TYPES[t.type]?.label}</span>
-                            </div>
-                            {t.comment && (
-                              <div className="flex items-center space-x-2">
-                                <span className="text-[8px] text-[#64748b] leading-tight italic max-w-[150px]">Motivo: {t.comment}</span>
-                                {t.category === 'medico' && (
-                                  <span className="text-[7px] font-black uppercase opacity-70">
-                                    [{t.status === 'pending' ? 'Pendente' : t.status === 'approved' ? 'Deferido' : 'Indeferido'}]
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          <span className="font-black text-sm">{format(new Date(t.timestamp), 'HH:mm')}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="pt-2 flex justify-between items-center border-t border-dashed border-[#94a3b8] mt-2">
-                      <p className="text-[#64748b] text-[10px] uppercase">Registros: {selectedTickets.length}</p>
-                      <p className="text-lg font-black">{calculateTotalHours(selectedTickets)}</p>
-                    </div>
+                <div className="space-y-3">
+                  <div className="flex justify-between border-b border-dashed border-[#94a3b8] pb-1">
+                    <p className="text-[#64748b] text-[10px] uppercase">Período</p>
+                    <p className="text-xs">{format(new Date(startDate), 'dd/MM/yyyy')} a {format(new Date(endDate), 'dd/MM/yyyy')}</p>
                   </div>
+                  <div className="space-y-2">
+                    {selectedTickets.map((t, i) => (
+                      <div key={i} className="flex justify-between items-start text-xs border-b border-[#cbd5e1]/50 pb-1 py-1">
+                        <div className="flex flex-col text-left">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[#64748b] text-[9px]">{format(new Date(t.timestamp), 'dd/MM')}</span>
+                            <span className="font-bold">{RECORD_TYPES[t.type]?.label}</span>
+                          </div>
+                          {t.comment && (
+                            <div className="flex items-center space-x-2">
+                              <span className="text-[8px] text-[#64748b] leading-tight italic max-w-[150px]">Motivo: {t.comment}</span>
+                              {t.category === 'medico' && (
+                                <span className="text-[7px] font-black uppercase opacity-70">
+                                  [{t.status === 'pending' ? 'Pendente' : t.status === 'approved' ? 'Deferido' : 'Indeferido'}]
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <span className="font-black text-sm">{format(new Date(t.timestamp), 'HH:mm')}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pt-2 flex justify-between items-center border-t border-dashed border-[#94a3b8] mt-2">
+                    <p className="text-[#64748b] text-[10px] uppercase">Registros: {selectedTickets.length}</p>
+                    <p className="text-lg font-black">{calculateTotalHours(selectedTickets)}</p>
+                  </div>
+                </div>
               )}
             </div>
 
@@ -2888,15 +2973,15 @@ export function PinEntry() {
           <div className="w-full space-y-3">
             {showQR ? (
               <div className="bg-white p-4 rounded-3xl flex flex-col items-center justify-center space-y-4 animate-in fade-in zoom-in shadow-2xl">
-                <QRCodeSVG 
+                <QRCodeSVG
                   value={
-                    selectedTickets.length === 1 
+                    selectedTickets.length === 1
                       ? `whatsapp://send?text=${encodeURIComponent((selectedTickets[0].status === 'rejected' ? '❌ *[SOLICITAÇÃO INDEFERIDA - INVÁLIDO COMO PONTO OFICIAL]*\n⚠️ *Favor procurar o setor de RH.*\n\n' : '') + '*COMPROVANTE DE PONTO*\n\n🏢 *Empresa:* ' + (settings?.companyName || 'Empresa') + '\n👤 *Funcionário:* ' + employee.name + '\n📅 *Data:* ' + format(new Date(selectedTickets[0].timestamp), 'dd/MM/yyyy') + '\n⏰ *Hora:* ' + format(new Date(selectedTickets[0].timestamp), 'HH:mm') + '\n📝 *Registro:* ' + RECORD_TYPES[selectedTickets[0].type]?.label + (selectedTickets[0].status === 'rejected' ? '\n❌ *Status:* INDEFERIDO' : '') + '\n🔑 *Hash:* ' + new Date(selectedTickets[0].timestamp).getTime().toString(16).toUpperCase())}`
                       : `whatsapp://send?text=${encodeURIComponent('*EXTRATO DE PONTO*\n\n🏢 *Empresa:* ' + (settings?.companyName || 'Empresa') + '\n👤 *Funcionário:* ' + employee.name + '\n📅 *Período:* ' + format(new Date(startDate), 'dd/MM') + ' a ' + format(new Date(endDate), 'dd/MM') + '\n⏱️ *Total:* ' + calculateTotalHours(selectedTickets) + '\n\n' + selectedTickets.map(t => '• ' + format(new Date(t.timestamp), 'dd/MM HH:mm') + ' - ' + RECORD_TYPES[t.type]?.label.split(' ')[0] + (t.status === 'rejected' ? ' [INDEFERIDO]' : '')).join('\n'))}`
-                  } 
-                  size={200} 
+                  }
+                  size={200}
                 />
-                <p className="text-xs font-bold text-slate-500 text-center">Abra a câmera do celular<br/>e aponte para o código.</p>
+                <p className="text-xs font-bold text-slate-500 text-center">Abra a câmera do celular<br />e aponte para o código.</p>
                 <button onClick={() => setShowQR(false)} className="text-[10px] font-black uppercase text-blue-500 p-2 hover:bg-blue-50 rounded-lg">Voltar aos botões</button>
               </div>
             ) : (
@@ -2924,7 +3009,7 @@ export function PinEntry() {
                 </button>
               </div>
             )}
-            
+
             <button
               onClick={() => setStep('history')}
               className="w-full py-4 text-slate-500 hover:text-slate-900 dark:text-white text-xs font-bold uppercase tracking-widest transition-colors"
@@ -2940,15 +3025,14 @@ export function PinEntry() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border border-slate-200/80 dark:border-white/10 p-6 md:p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center space-y-5 transform transition-all animate-in zoom-in-95 duration-200">
             <div className="flex justify-center">
-              <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border shadow-lg ${
-                feedbackModal.type === 'success'
+              <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border shadow-lg ${feedbackModal.type === 'success'
                   ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10'
                   : feedbackModal.type === 'warning'
-                  ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 shadow-amber-500/10'
-                  : feedbackModal.type === 'error'
-                  ? 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10'
-                  : 'bg-blue-500/10 text-blue-500 border-blue-500/20 shadow-blue-500/10'
-              }`}>
+                    ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 shadow-amber-500/10'
+                    : feedbackModal.type === 'error'
+                      ? 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10'
+                      : 'bg-blue-500/10 text-blue-500 border-blue-500/20 shadow-blue-500/10'
+                }`}>
                 {feedbackModal.type === 'success' && <CheckCircle2 className="w-8 h-8" />}
                 {feedbackModal.type === 'warning' && <ShieldAlert className="w-8 h-8" />}
                 {feedbackModal.type === 'error' && <AlertCircle className="w-8 h-8" />}

@@ -120,8 +120,10 @@ const RECORD_TYPES = {
   other_out: { label: 'SAÍDA EXTRA', color: 'bg-purple-500/10 text-purple-500' },
   other_in: { label: 'RETORNO EXTRA', color: 'bg-indigo-500/10 text-indigo-500' },
   system_auto_checkout: { label: 'SAÍDA AUTOMÁTICA', color: 'bg-red-500/10 text-red-500' },
-  admin_absence: { label: 'FALTA NÃO JUSTIFICADA', color: 'bg-red-900/30 text-red-400 border border-red-500/30' },
-  admin_excused: { label: 'ATESTADO MÉDICO/FÉRIAS', color: 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30' },
+  admin_absence: { label: 'FALTA INJUSTIFICADA', color: 'bg-red-900/30 text-red-400 border border-red-500/30' },
+  admin_excused: { label: 'ATESTADO MÉDICO / LICENÇA', color: 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30' },
+  admin_abonada: { label: 'FALTA ABONADA', color: 'bg-teal-900/30 text-teal-400 border border-teal-500/30' },
+  admin_vacation: { label: 'FÉRIAS', color: 'bg-cyan-900/30 text-cyan-400 border border-cyan-500/30' },
   admin_adjustment: { label: 'AJUSTE MANUAL', color: 'bg-blue-600/20 text-blue-500 border border-blue-500/30' },
   superseded: { label: 'SUBSTITUÍDO (AJUSTADO)', color: 'bg-slate-500/10 text-slate-400 opacity-50 line-through' }
 }
@@ -2069,7 +2071,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
   const [config, setConfig] = useState(null)
   const [manualEntryData, setManualEntryData] = useState({
     employeeId: '',
-    type: 'admin_excused',
+    type: 'admin_abonada',
     startDate: format(new Date(), 'yyyy-MM-dd'),
     endDate: format(new Date(), 'yyyy-MM-dd'),
     comment: ''
@@ -2310,6 +2312,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
       const dailyData = {}
       let totalExpectedMin = 0
       let totalWorkedMin = 0
+      let totalExcusedMin = 0
       
       const holidays = await db.holidays.toArray()
       const netShift = calculateNetShiftTime(emp?.shiftStart || '08:00', emp?.lunchStart || '12:00', emp?.lunchEnd || '13:00', emp?.shiftEnd || '17:00')
@@ -2334,7 +2337,11 @@ function ReportsManager({ employees, departments, onDataChange }) {
           expectedMin: isWorkDay ? dailyExpectedMin : 0,
           isHoliday: !!holiday,
           holidayName: holiday?.name || '',
-          isWorkDay
+          isWorkDay,
+          isAbonada: false,
+          isExcused: false,
+          isVacation: false,
+          isAbsence: false
         }
         
         if (holiday) dailyData[dayStr].obs.push(`FERIADO: ${holiday.name.toUpperCase()}`)
@@ -2356,7 +2363,19 @@ function ReportsManager({ employees, departments, onDataChange }) {
             const reason = r.comment ? `(${r.comment.toUpperCase()})` : ''
             dailyData[date].extras.push(`${time}${reason}`)
           }
-          if (r.comment && !dailyData[date].obs.includes(r.comment.toUpperCase())) {
+          if (r.type === 'admin_abonada') {
+            dailyData[date].isAbonada = true
+            dailyData[date].obs.push(`FALTA ABONADA: ${r.comment ? r.comment.toUpperCase() : 'AUTORIZADA PELA GESTÃO'}`)
+          } else if (r.type === 'admin_excused') {
+            dailyData[date].isExcused = true
+            dailyData[date].obs.push(`ATESTADO MÉDICO: ${r.comment ? r.comment.toUpperCase() : 'APRESENTOU COMPROVANTE'}`)
+          } else if (r.type === 'admin_vacation') {
+            dailyData[date].isVacation = true
+            dailyData[date].obs.push(`FÉRIAS: ${r.comment ? r.comment.toUpperCase() : 'PERÍODO CONCESSIVO'}`)
+          } else if (r.type === 'admin_absence') {
+            dailyData[date].isAbsence = true
+            dailyData[date].obs.push(`FALTA INJUSTIFICADA: ${r.comment ? r.comment.toUpperCase() : 'NÃO JUSTIFICADA'}`)
+          } else if (r.comment && !dailyData[date].obs.includes(r.comment.toUpperCase())) {
             dailyData[date].obs.push(r.comment.toUpperCase())
           }
         }
@@ -2390,6 +2409,19 @@ function ReportsManager({ employees, departments, onDataChange }) {
             dailyTotalStr = `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`
             if (multiplier > 1) dailyTotalStr += ` (x${multiplier})`
           }
+        }
+
+        if (data.isAbonada) {
+          totalExcusedMin += data.expectedMin
+          if (data.workedMin === 0) dailyTotalStr = `ABONADO (${Math.floor(data.expectedMin / 60)}h)`
+        } else if (data.isExcused) {
+          totalExcusedMin += data.expectedMin
+          if (data.workedMin === 0) dailyTotalStr = `ATESTADO (${Math.floor(data.expectedMin / 60)}h)`
+        } else if (data.isVacation) {
+          totalExcusedMin += data.expectedMin
+          if (data.workedMin === 0) dailyTotalStr = `FÉRIAS`
+        } else if (data.isAbsence && data.workedMin === 0) {
+          dailyTotalStr = `FALTA`
         }
 
         return [
@@ -2427,9 +2459,9 @@ function ReportsManager({ employees, departments, onDataChange }) {
       const finalY = (doc).lastAutoTable.finalY || 180
       
       // Detailed Balance Footer
-      const overtimeMin = Math.max(0, totalWorkedMin - totalExpectedMin)
-      const missingMin = Math.max(0, totalExpectedMin - totalWorkedMin)
-      const balanceMin = totalWorkedMin - totalExpectedMin
+      const balanceMin = (totalWorkedMin + totalExcusedMin) - totalExpectedMin
+      const overtimeMin = Math.max(0, balanceMin)
+      const missingMin = Math.max(0, -balanceMin)
 
       const formatMin = (m) => {
         const abs = Math.abs(m)
@@ -2448,13 +2480,15 @@ function ReportsManager({ employees, departments, onDataChange }) {
       
       const footerY = finalY + 12
       doc.text(`CARGA PREVISTA: ${formatMin(totalExpectedMin)}`, 14, footerY)
-      doc.text(`TOTAL TRABALHADO: ${formatMin(totalWorkedMin)}`, 80, footerY)
+      doc.text(`TRABALHADO: ${formatMin(totalWorkedMin)}`, 68, footerY)
+      doc.setTextColor(13, 148, 136)
+      doc.text(`ABONADO: +${formatMin(totalExcusedMin)}`, 122, footerY)
       doc.setTextColor(16, 185, 129)
-      doc.text(`EXTRAS: ${formatMin(overtimeMin)}`, 150, footerY)
+      doc.text(`EXTRAS: +${formatMin(overtimeMin)}`, 175, footerY)
       doc.setTextColor(239, 68, 68)
-      doc.text(`FALTAS: ${formatMin(missingMin)}`, 200, footerY)
+      doc.text(`FALTAS: -${formatMin(missingMin)}`, 220, footerY)
       doc.setTextColor(balanceMin >= 0 ? 59 : 239, balanceMin >= 0 ? 130 : 68, balanceMin >= 0 ? 246 : 68)
-      doc.text(`SALDO FINAL: ${formatMin(balanceMin)}`, 250, footerY)
+      doc.text(`SALDO: ${formatMin(balanceMin)}`, 255, footerY)
 
       doc.setFontSize(7)
       doc.setFont(undefined, 'normal')
@@ -2675,7 +2709,9 @@ function ReportsManager({ employees, departments, onDataChange }) {
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Tipo de Registro</label>
               <select className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-bold" value={manualEntryData.type} onChange={e => setManualEntryData({...manualEntryData, type: e.target.value})}>
-                <option value="admin_excused">Atestado Médico / Férias</option>
+                <option value="admin_abonada">Falta Abonada (Particular/Gestão)</option>
+                <option value="admin_excused">Atestado Médico / Licença</option>
+                <option value="admin_vacation">Férias</option>
                 <option value="admin_absence">Falta Injustificada</option>
               </select>
             </div>
@@ -2794,7 +2830,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5">
               <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Carga Prevista CLT</span>
               <span className="text-xl font-black text-slate-900 dark:text-white font-mono mt-1 block">{empTimeBank.expectedFormatted}</span>
@@ -2807,10 +2843,16 @@ function ReportsManager({ employees, departments, onDataChange }) {
               <span className="text-[10px] text-blue-500/80 mt-0.5 block">{empTimeBank.workedDaysCount} dia(s) com batida</span>
             </div>
 
+            <div className="p-4 rounded-2xl bg-teal-500/10 border border-teal-500/20">
+              <span className="text-[10px] font-black text-teal-600 dark:text-teal-400 uppercase tracking-wider block">Horas Abonadas</span>
+              <span className="text-xl font-black text-teal-700 dark:text-teal-300 font-mono mt-1 block">+{empTimeBank.excusedFormatted}</span>
+              <span className="text-[10px] text-teal-600/80 mt-0.5 block">{empTimeBank.excusedDaysCount} dia(s) abonado(s)</span>
+            </div>
+
             <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
               <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block">Horas Extras ("Na Casa")</span>
               <span className="text-xl font-black text-emerald-700 dark:text-emerald-300 font-mono mt-1 block">+{empTimeBank.overtimeFormatted}</span>
-              <span className="text-[10px] text-emerald-600/80 mt-0.5 block">Crédito p/ compensar ou pagar</span>
+              <span className="text-[10px] text-emerald-600/80 mt-0.5 block">Crédito p/ compensar</span>
             </div>
 
             <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/20">
@@ -3017,7 +3059,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
                     
                     <div className="flex flex-col md:flex-row items-center gap-2 shrink-0">
                       <span className={`px-4 py-1.5 rounded-xl text-[9px] font-black tracking-widest uppercase text-white ${config.color.split(' ')[0]}`}>{config.label}</span>
-                      {r.type !== 'superseded' && r.type !== 'admin_adjustment' && r.type !== 'admin_absence' && r.type !== 'admin_excused' && (
+                      {r.type !== 'superseded' && r.type !== 'admin_adjustment' && r.type !== 'admin_absence' && r.type !== 'admin_excused' && r.type !== 'admin_abonada' && r.type !== 'admin_vacation' && (
                         <div className="flex items-center gap-1.5">
                           <button 
                             onClick={() => setAdjustmentData({ record: r, newTime: format(new Date(r.timestamp), 'HH:mm'), reason: '' })}

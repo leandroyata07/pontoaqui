@@ -31,7 +31,10 @@ export function calculateDayWorkedMinutes(dayRecords = [], isToday = false) {
   let totalMs = 0
   let isWorking = false
   let lastStart = null
-  let hasExcused = valid.some(r => r.type === 'admin_excused')
+  let hasExcused = valid.some(r => ['admin_excused', 'admin_abonada', 'admin_vacation'].includes(r.type))
+  let hasAbonada = valid.some(r => r.type === 'admin_abonada')
+  let hasMedical = valid.some(r => r.type === 'admin_excused')
+  let hasVacation = valid.some(r => r.type === 'admin_vacation')
   let hasAbsence = valid.some(r => r.type === 'admin_absence')
 
   valid.forEach(r => {
@@ -59,6 +62,9 @@ export function calculateDayWorkedMinutes(dayRecords = [], isToday = false) {
     workedMin,
     isWorking,
     hasExcused,
+    hasAbonada,
+    hasMedical,
+    hasVacation,
     hasAbsence,
     recordsCount: valid.length
   }
@@ -90,10 +96,14 @@ export function calculateEmployeeMonthBalance(emp, allRecords = [], holidays = [
   const daysInMonth = monthEnd.getDate()
   let totalExpectedMin = 0
   let totalWorkedMin = 0
+  let totalExcusedMin = 0
   let isCurrentlyWorking = false
   let workedDaysCount = 0
   let absenceDaysCount = 0
   let excusedDaysCount = 0
+  let abonadaDaysCount = 0
+  let medicalDaysCount = 0
+  let vacationDaysCount = 0
 
   // Filtra registros do colaborador no mês selecionado
   const empRecords = allRecords.filter(r => {
@@ -132,14 +142,20 @@ export function calculateEmployeeMonthBalance(emp, allRecords = [], holidays = [
       isCurrentlyWorking = true
     }
 
-    let expectedMin = 0
     if (dayCalc.hasExcused) {
-      // Dia justificado (atestado/férias): não gera débito
+      // Dia justificado (falta abonada, atestado médico, férias):
+      // Registra a contagem e horas abonadas correspondentes à jornada do dia para não haver desconto salarial
       excusedDaysCount++
-      expectedMin = 0
+      if (dayCalc.hasAbonada) abonadaDaysCount++
+      if (dayCalc.hasMedical) medicalDaysCount++
+      if (dayCalc.hasVacation) vacationDaysCount++
+
+      if (isScheduledWorkDay) {
+        totalExpectedMin += dailyExpectedMin
+        totalExcusedMin += dailyExpectedMin
+      }
     } else if (isScheduledWorkDay) {
-      expectedMin = dailyExpectedMin
-      totalExpectedMin += expectedMin
+      totalExpectedMin += dailyExpectedMin
       if (dayCalc.workedMin === 0 && !isToday) {
         absenceDaysCount++
       }
@@ -157,7 +173,8 @@ export function calculateEmployeeMonthBalance(emp, allRecords = [], holidays = [
     totalWorkedMin += workedMin
   }
 
-  const balanceMin = totalWorkedMin - totalExpectedMin
+  // O tempo abonado compensa a meta prevista para que faltas abonadas/justificadas não gerem débito
+  const balanceMin = (totalWorkedMin + totalExcusedMin) - totalExpectedMin
   const overtimeMin = Math.max(0, balanceMin)
   const debtMin = Math.max(0, -balanceMin)
 
@@ -173,6 +190,7 @@ export function calculateEmployeeMonthBalance(emp, allRecords = [], holidays = [
     targetMonth: targetMonthStr,
     totalExpectedMin,
     totalWorkedMin,
+    totalExcusedMin,
     balanceMin,
     overtimeMin,
     debtMin,
@@ -181,8 +199,12 @@ export function calculateEmployeeMonthBalance(emp, allRecords = [], holidays = [
     workedDaysCount,
     absenceDaysCount,
     excusedDaysCount,
+    abonadaDaysCount,
+    medicalDaysCount,
+    vacationDaysCount,
     expectedFormatted: formatMinutesToHours(totalExpectedMin),
     workedFormatted: formatMinutesToHours(totalWorkedMin),
+    excusedFormatted: formatMinutesToHours(totalExcusedMin),
     balanceFormatted: formatMinutesToHours(balanceMin, true),
     overtimeFormatted: formatMinutesToHours(overtimeMin),
     debtFormatted: formatMinutesToHours(debtMin)
@@ -199,6 +221,7 @@ export function calculateCompanyMonthBalance(employees = [], allRecords = [], ho
 
   let totalCompanyWorkedMin = 0
   let totalCompanyExpectedMin = 0
+  let totalCompanyExcusedMin = 0
   let totalOvertimeMin = 0
   let totalDebtMin = 0
   let creditCount = 0
@@ -209,6 +232,7 @@ export function calculateCompanyMonthBalance(employees = [], allRecords = [], ho
   employeeBalances.forEach(b => {
     totalCompanyWorkedMin += b.totalWorkedMin
     totalCompanyExpectedMin += b.totalExpectedMin
+    totalCompanyExcusedMin += (b.totalExcusedMin || 0)
     totalOvertimeMin += b.overtimeMin
     totalDebtMin += b.debtMin
     if (b.status === 'credit') creditCount++
@@ -217,7 +241,7 @@ export function calculateCompanyMonthBalance(employees = [], allRecords = [], ho
     if (b.isCurrentlyWorking) activeWorkersCount++
   })
 
-  const companyNetBalanceMin = totalCompanyWorkedMin - totalCompanyExpectedMin
+  const companyNetBalanceMin = (totalCompanyWorkedMin + totalCompanyExcusedMin) - totalCompanyExpectedMin
 
   return {
     targetMonth: targetMonthStr,
@@ -225,6 +249,7 @@ export function calculateCompanyMonthBalance(employees = [], allRecords = [], ho
     activeWorkersCount,
     totalCompanyWorkedMin,
     totalCompanyExpectedMin,
+    totalCompanyExcusedMin,
     totalOvertimeMin,
     totalDebtMin,
     companyNetBalanceMin,
@@ -236,6 +261,7 @@ export function calculateCompanyMonthBalance(employees = [], allRecords = [], ho
     totalDebtFormatted: formatMinutesToHours(totalDebtMin),
     totalWorkedFormatted: formatMinutesToHours(totalCompanyWorkedMin),
     totalExpectedFormatted: formatMinutesToHours(totalCompanyExpectedMin),
+    totalExcusedFormatted: formatMinutesToHours(totalCompanyExcusedMin),
     employeeBalances
   }
 }
