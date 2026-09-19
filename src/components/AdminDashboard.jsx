@@ -767,6 +767,7 @@ function EmployeeManager({ employees, departments, onDataChange }) {
   const defaultEmpState = { 
     name: '', 
     pin: '', 
+    admissionDate: '',
     startDate: format(new Date(), 'yyyy-MM-dd'), 
     photo: '', 
     email: '',
@@ -866,6 +867,7 @@ function EmployeeManager({ employees, departments, onDataChange }) {
     setNewEmp({
       ...defaultEmpState,
       ...emp,
+      admissionDate: emp.admissionDate || emp.startDate || '',
       workRegime: emp.workRegime || 'clt_5x2_44',
       weeklyHours: emp.weeklyHours ?? 44,
       workDays: Array.isArray(emp.workDays) ? emp.workDays : (emp.workRegime?.startsWith('scale_') ? [] : [1, 2, 3, 4, 5]),
@@ -1017,12 +1019,16 @@ function EmployeeManager({ employees, departments, onDataChange }) {
                   <input type="text" placeholder="Ex: João da Silva" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all font-bold placeholder:font-normal" value={newEmp.name} onChange={e => setNewEmp({...newEmp, name: e.target.value})} required />
                 </div>
                 <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 ml-1 mb-1 block">E-mail</label>
-                  <input type="email" placeholder="email@empresa.com" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all font-bold placeholder:font-normal" value={newEmp.email || ''} onChange={e => setNewEmp({...newEmp, email: e.target.value})} />
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 ml-1 mb-1 block">Data de Admissão</label>
+                  <input type="date" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-bold" value={newEmp.admissionDate || ''} onChange={e => setNewEmp({...newEmp, admissionDate: e.target.value})} />
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 ml-1 mb-1 block">CPF</label>
                   <input type="text" placeholder="000.000.000-00" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-bold placeholder:font-normal" value={newEmp.cpf || ''} onChange={e => setNewEmp({...newEmp, cpf: formatCPF(e.target.value)})} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 ml-1 mb-1 block">E-mail</label>
+                  <input type="email" placeholder="email@empresa.com" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 transition-all font-bold placeholder:font-normal" value={newEmp.email || ''} onChange={e => setNewEmp({...newEmp, email: e.target.value})} />
                 </div>
               </div>
             </div>
@@ -1728,6 +1734,13 @@ function EmployeeManager({ employees, departments, onDataChange }) {
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Acesso PIN: <span className="text-slate-900 dark:text-white">{emp.pin}</span></span>
                         </div>
 
+                        {(emp.admissionDate || emp.startDate) && (
+                          <div className="flex items-center space-x-2 mt-1.5">
+                            <Calendar className="w-3 h-3 text-slate-400" />
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Admissão: <span className="text-slate-900 dark:text-white">{format(new Date((emp.admissionDate || emp.startDate) + 'T12:00:00'), 'dd/MM/yyyy')}</span></span>
+                          </div>
+                        )}
+
                         {/* Bloco de Jornada e Turno */}
                         <div className="mt-4 p-3 bg-slate-50 dark:bg-black/40 rounded-2xl border border-black/5 dark:border-white/5 space-y-1.5 text-[11px]">
                           <div className="flex items-center justify-between text-slate-700 dark:text-slate-300 font-bold">
@@ -2303,20 +2316,32 @@ function ReportsManager({ employees, departments, onDataChange }) {
       doc.setFontSize(9)
       doc.setTextColor(30, 41, 59)
       doc.text(`COLABORADOR: ${emp?.name?.toUpperCase() || 'N/A'}`, 14, 40)
+      const admissionStr = (emp?.admissionDate || emp?.startDate)
+        ? format(new Date((emp.admissionDate || emp.startDate) + 'T12:00:00'), 'dd/MM/yyyy')
+        : 'N/A'
       doc.text(`CPF: ${emp?.cpf || 'N/A'}`, 14, 45)
-      doc.text(`SETOR: ${getDepartmentName(emp).toUpperCase()}`, 100, 45)
-      doc.text(`PERÍODO: ${periodLabel}`, 200, 45)
+      doc.text(`ADMISSÃO: ${admissionStr}`, 80, 45)
+      doc.text(`SETOR: ${getDepartmentName(emp).toUpperCase()}`, 145, 45)
+      doc.text(`PERÍODO: ${periodLabel}`, 215, 45)
 
       // Group records by day and calculate balances
       const daysInMonth = endOfMonth(monthDate).getDate()
       const dailyData = {}
-      let totalExpectedMin = 0
+      let totalMonthExpectedMin = 0
+      let elapsedExpectedMin = 0
+      let futurePendingMin = 0
       let totalWorkedMin = 0
       let totalExcusedMin = 0
+      let accumulatedOvertimeMin = 0
+      let actualAbsenceMin = 0
       
       const holidays = await db.holidays.toArray()
       const netShift = calculateNetShiftTime(emp?.shiftStart || '08:00', emp?.lunchStart || '12:00', emp?.lunchEnd || '13:00', emp?.shiftEnd || '17:00')
       const dailyExpectedMin = netShift.dailyMin || 480
+
+      const currentMonthStr = format(new Date(), 'yyyy-MM')
+      const isCurrentMonth = filter.month === currentMonthStr
+      const todayISO = format(new Date(), 'yyyy-MM-dd')
 
       for (let i = 1; i <= daysInMonth; i++) {
         const d = new Date(monthDate.getFullYear(), monthDate.getMonth(), i)
@@ -2325,8 +2350,11 @@ function ReportsManager({ employees, departments, onDataChange }) {
         const workDayStatus = checkEmployeeWorkDay(emp, d)
         const isWorkDay = workDayStatus.isWorkDay && !holiday
         const dayStr = `${i.toString().padStart(2, '0')}/${format(monthDate, 'MM/yyyy')}`
+        const isFuture = isCurrentMonth && dateISO > todayISO
+        const isElapsed = !isCurrentMonth || dateISO <= todayISO
         
         dailyData[dayStr] = {
+          dateISO,
           in: '-',
           lunchOut: '-',
           lunchIn: '-',
@@ -2338,6 +2366,8 @@ function ReportsManager({ employees, departments, onDataChange }) {
           isHoliday: !!holiday,
           holidayName: holiday?.name || '',
           isWorkDay,
+          isFuture,
+          isElapsed,
           isAbonada: false,
           isExcused: false,
           isVacation: false,
@@ -2347,7 +2377,14 @@ function ReportsManager({ employees, departments, onDataChange }) {
         if (holiday) dailyData[dayStr].obs.push(`FERIADO: ${holiday.name.toUpperCase()}`)
         else if (!workDayStatus.isWorkDay) dailyData[dayStr].obs.push(workDayStatus.label.toUpperCase())
 
-        if (isWorkDay) totalExpectedMin += dailyExpectedMin
+        if (isWorkDay) {
+          totalMonthExpectedMin += dailyExpectedMin
+          if (isFuture) {
+            futurePendingMin += dailyExpectedMin
+          } else {
+            elapsedExpectedMin += dailyExpectedMin
+          }
+        }
       }
 
       records.filter(r => r.status !== 'rejected').forEach(r => {
@@ -2360,8 +2397,19 @@ function ReportsManager({ employees, departments, onDataChange }) {
           else if (r.type === 'check_out' || r.type === 'system_auto_checkout' || r.type === 'admin_adjustment') dailyData[date].out = time
           
           if (r.type === 'other_out' || r.type === 'other_in') {
-            const reason = r.comment ? `(${r.comment.toUpperCase()})` : ''
-            dailyData[date].extras.push(`${time}${reason}`)
+            const rawComment = r.comment || ''
+            let cleanComment = rawComment
+              .replace(/PONTO RETROATIVO\s*(\(AUTORIZADO PELA GEST[ÃA]O\))?/gi, '')
+              .replace(/LANÇAMENTO RETROATIVO\s*(\(AUTORIZADO PELA GEST[ÃA]O\))?/gi, '')
+              .replace(/LANÇAMENTO RETROATIVO AUTORIZADO/gi, '')
+              .replace(/[\(\)]/g, '')
+              .trim()
+            const label = r.type === 'other_out' ? 'Saída Extra' : 'Retorno Extra'
+            const displayStr = cleanComment ? `${time} ${label} (${cleanComment})` : `${time} ${label}`
+            dailyData[date].extras.push({
+              timestamp: new Date(r.timestamp).getTime(),
+              text: displayStr
+            })
           }
           if (r.type === 'admin_abonada') {
             dailyData[date].isAbonada = true
@@ -2375,8 +2423,14 @@ function ReportsManager({ employees, departments, onDataChange }) {
           } else if (r.type === 'admin_absence') {
             dailyData[date].isAbsence = true
             dailyData[date].obs.push(`FALTA INJUSTIFICADA: ${r.comment ? r.comment.toUpperCase() : 'NÃO JUSTIFICADA'}`)
-          } else if (r.comment && !dailyData[date].obs.includes(r.comment.toUpperCase())) {
-            dailyData[date].obs.push(r.comment.toUpperCase())
+          } else if (r.comment) {
+            let obsText = r.comment.toUpperCase()
+            if (obsText.includes('PONTO RETROATIVO') || obsText.includes('LANÇAMENTO RETROATIVO')) {
+              obsText = 'LANÇAMENTO RETROATIVO AUTORIZADO'
+            }
+            if (!dailyData[date].obs.includes(obsText)) {
+              dailyData[date].obs.push(obsText)
+            }
           }
         }
       })
@@ -2411,25 +2465,46 @@ function ReportsManager({ employees, departments, onDataChange }) {
           }
         }
 
+        let effectiveExcused = 0
         if (data.isAbonada) {
-          totalExcusedMin += data.expectedMin
+          effectiveExcused = data.expectedMin
+          totalExcusedMin += effectiveExcused
           if (data.workedMin === 0) dailyTotalStr = `ABONADO (${Math.floor(data.expectedMin / 60)}h)`
         } else if (data.isExcused) {
-          totalExcusedMin += data.expectedMin
+          effectiveExcused = data.expectedMin
+          totalExcusedMin += effectiveExcused
           if (data.workedMin === 0) dailyTotalStr = `ATESTADO (${Math.floor(data.expectedMin / 60)}h)`
         } else if (data.isVacation) {
-          totalExcusedMin += data.expectedMin
+          effectiveExcused = data.expectedMin
+          totalExcusedMin += effectiveExcused
           if (data.workedMin === 0) dailyTotalStr = `FÉRIAS`
         } else if (data.isAbsence && data.workedMin === 0) {
           dailyTotalStr = `FALTA`
         }
+
+        // Compute positive overtime on this day
+        if (data.workedMin > data.expectedMin) {
+          accumulatedOvertimeMin += (data.workedMin - data.expectedMin)
+        }
+
+        // Actual absence on elapsed workdays
+        if (data.isElapsed && data.isWorkDay && !data.isAbonada && !data.isExcused && !data.isVacation) {
+          const dayCredit = data.workedMin + effectiveExcused
+          if (dayCredit < data.expectedMin) {
+            actualAbsenceMin += (data.expectedMin - dayCredit)
+          }
+        }
+
+        // Sort extras chronologically ascending
+        data.extras.sort((a, b) => a.timestamp - b.timestamp)
+        const extrasStr = data.extras.length > 0 ? data.extras.map(e => e.text).join(' | ') : '-'
 
         return [
           date,
           data.in,
           data.lunchOut,
           data.lunchIn,
-          data.extras.length > 0 ? data.extras.join(' | ') : '-',
+          extrasStr,
           data.out,
           dailyTotalStr,
           data.obs.length > 0 ? data.obs.join('; ') : '-'
@@ -2457,11 +2532,6 @@ function ReportsManager({ employees, departments, onDataChange }) {
       })
 
       const finalY = (doc).lastAutoTable.finalY || 180
-      
-      // Detailed Balance Footer
-      const balanceMin = (totalWorkedMin + totalExcusedMin) - totalExpectedMin
-      const overtimeMin = Math.max(0, balanceMin)
-      const missingMin = Math.max(0, -balanceMin)
 
       const formatMin = (m) => {
         const abs = Math.abs(m)
@@ -2472,23 +2542,56 @@ function ReportsManager({ employees, departments, onDataChange }) {
 
       doc.setDrawColor(30, 41, 59)
       doc.setLineWidth(0.5)
-      doc.line(14, finalY + 5, 282, finalY + 5)
+      doc.line(14, finalY + 4, 282, finalY + 4)
 
-      doc.setFontSize(9)
       doc.setFont(undefined, 'bold')
-      doc.setTextColor(30, 41, 59)
-      
-      const footerY = finalY + 12
-      doc.text(`CARGA PREVISTA: ${formatMin(totalExpectedMin)}`, 14, footerY)
-      doc.text(`TRABALHADO: ${formatMin(totalWorkedMin)}`, 68, footerY)
-      doc.setTextColor(13, 148, 136)
-      doc.text(`ABONADO: +${formatMin(totalExcusedMin)}`, 122, footerY)
-      doc.setTextColor(16, 185, 129)
-      doc.text(`EXTRAS: +${formatMin(overtimeMin)}`, 175, footerY)
-      doc.setTextColor(239, 68, 68)
-      doc.text(`FALTAS: -${formatMin(missingMin)}`, 220, footerY)
-      doc.setTextColor(balanceMin >= 0 ? 59 : 239, balanceMin >= 0 ? 130 : 68, balanceMin >= 0 ? 246 : 68)
-      doc.text(`SALDO: ${formatMin(balanceMin)}`, 255, footerY)
+
+      if (isCurrentMonth) {
+        // Mês em andamento: Visão dinâmica de acompanhamento
+        const currentBalance = (totalWorkedMin + totalExcusedMin) - elapsedExpectedMin
+
+        // Linha 1: Métricas de Carga e Trabalho
+        doc.setFontSize(8.5)
+        doc.setTextColor(30, 41, 59)
+        doc.text(`CARGA TOTAL MÊS: ${formatMin(totalMonthExpectedMin)}`, 14, finalY + 10)
+        doc.text(`PREVISTO ATÉ HOJE: ${formatMin(elapsedExpectedMin)}`, 85, finalY + 10)
+        doc.text(`TRABALHADO: ${formatMin(totalWorkedMin)}`, 160, finalY + 10)
+        doc.setTextColor(13, 148, 136)
+        doc.text(`ABONADO: +${formatMin(totalExcusedMin)}`, 225, finalY + 10)
+
+        // Linha 2: Balanço de Acompanhamento (Extras, A Cumprir, Faltas Reais e Saldo Atual)
+        doc.setFontSize(8.5)
+        doc.setTextColor(16, 185, 129)
+        doc.text(`EXTRAS ACUMULADAS: +${formatMin(accumulatedOvertimeMin)}`, 14, finalY + 16)
+        
+        doc.setTextColor(37, 99, 235) // Azul / Neutro para horas futuras a cumprir
+        doc.text(`A CUMPRIR NO MÊS: ${formatMin(futurePendingMin)}`, 85, finalY + 16)
+        
+        doc.setTextColor(239, 68, 68) // Vermelho apenas para faltas/atrasos reais de dias passados
+        doc.text(`FALTAS ATÉ HOJE: -${formatMin(actualAbsenceMin)}`, 160, finalY + 16)
+        
+        doc.setTextColor(currentBalance >= 0 ? 16 : 239, currentBalance >= 0 ? 185 : 68, currentBalance >= 0 ? 129 : 68)
+        doc.text(`SALDO ATUAL: ${formatMin(currentBalance)}`, 225, finalY + 16)
+      } else {
+        // Mês já encerrado: Fechamento consolidado padrão
+        const balanceMin = (totalWorkedMin + totalExcusedMin) - totalMonthExpectedMin
+        const overtimeMin = Math.max(0, balanceMin)
+        const missingMin = Math.max(0, -balanceMin)
+
+        doc.setFontSize(9)
+        doc.setTextColor(30, 41, 59)
+        const footerY = finalY + 12
+        doc.text(`CARGA PREVISTA: ${formatMin(totalMonthExpectedMin)}`, 14, footerY)
+        doc.text(`TRABALHADO: ${formatMin(totalWorkedMin)}`, 68, footerY)
+        doc.setTextColor(13, 148, 136)
+        doc.text(`ABONADO: +${formatMin(totalExcusedMin)}`, 122, footerY)
+        doc.setTextColor(16, 185, 129)
+        doc.text(`EXTRAS: +${formatMin(overtimeMin)}`, 175, footerY)
+        doc.setTextColor(239, 68, 68)
+        doc.text(`FALTAS: -${formatMin(missingMin)}`, 220, footerY)
+        doc.setTextColor(balanceMin >= 0 ? 16 : 239, balanceMin >= 0 ? 185 : 68, balanceMin >= 0 ? 129 : 68)
+        doc.text(`SALDO FINAL: ${formatMin(balanceMin)}`, 255, footerY)
+      }
 
       doc.setFontSize(7)
       doc.setFont(undefined, 'normal')
@@ -3273,6 +3376,11 @@ function ReportsManager({ employees, departments, onDataChange }) {
           <p>CPF: {employees.find(e => e.id === Number(filter.employeeId))?.cpf || 'N/A'}</p>
         </div>
         <div className="text-right">
+          <p>Admissão: {(() => {
+            const currentEmp = employees.find(e => e.id === Number(filter.employeeId))
+            const adm = currentEmp?.admissionDate || currentEmp?.startDate
+            return adm ? format(new Date(adm + 'T12:00:00'), 'dd/MM/yyyy') : 'N/A'
+          })()}</p>
           <p>Setor: {getDepartmentName(employees.find(e => e.id === Number(filter.employeeId)))}</p>
         </div>
       </div>
@@ -3311,8 +3419,27 @@ function ReportsManager({ employees, departments, onDataChange }) {
                   else if (r.type === 'lunch_out') daily[date].lunchOut = time
                   else if (r.type === 'lunch_in') daily[date].lunchIn = time
                   else if (r.type === 'check_out' || r.type === 'system_auto_checkout' || r.type === 'admin_adjustment') daily[date].out = time
-                  if (r.type === 'other_out' || r.type === 'other_in') daily[date].extras.push(`${time}${r.comment ? `(${r.comment.toUpperCase()})` : ''}`)
-                  if (r.comment && !daily[date].obs.includes(r.comment.toUpperCase())) daily[date].obs.push(r.comment.toUpperCase())
+                  if (r.type === 'other_out' || r.type === 'other_in') {
+                    const rawComment = r.comment || ''
+                    let cleanComment = rawComment
+                      .replace(/PONTO RETROATIVO\s*(\(AUTORIZADO PELA GEST[ÃA]O\))?/gi, '')
+                      .replace(/LANÇAMENTO RETROATIVO\s*(\(AUTORIZADO PELA GEST[ÃA]O\))?/gi, '')
+                      .replace(/LANÇAMENTO RETROATIVO AUTORIZADO/gi, '')
+                      .replace(/[\(\)]/g, '')
+                      .trim()
+                    const label = r.type === 'other_out' ? 'Saída Extra' : 'Retorno Extra'
+                    const displayStr = cleanComment ? `${time} ${label} (${cleanComment})` : `${time} ${label}`
+                    daily[date].extras.push({ timestamp: new Date(r.timestamp).getTime(), text: displayStr })
+                  }
+                  if (r.comment) {
+                    let obsText = r.comment.toUpperCase()
+                    if (obsText.includes('PONTO RETROATIVO') || obsText.includes('LANÇAMENTO RETROATIVO')) {
+                      obsText = 'LANÇAMENTO RETROATIVO AUTORIZADO'
+                    }
+                    if (!daily[date].obs.includes(obsText)) {
+                      daily[date].obs.push(obsText)
+                    }
+                  }
                 }
               })
               return daily
@@ -3334,7 +3461,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
                 <td className="border border-black p-1 text-center">{data.in}</td>
                 <td className="border border-black p-1 text-center">{data.lunchOut}</td>
                 <td className="border border-black p-1 text-center">{data.lunchIn}</td>
-                <td className="border border-black p-1 text-left text-[7px]">{data.extras.join(' | ') || '-'}</td>
+                <td className="border border-black p-1 text-left text-[7px]">{data.extras.sort((a, b) => a.timestamp - b.timestamp).map(e => e.text).join(' | ') || '-'}</td>
                 <td className="border border-black p-1 text-center">{data.out}</td>
                 <td className="border border-black p-1 text-center font-bold">{dailyTotalStr}</td>
                 <td className="border border-black p-1 text-left text-[7px]">{data.obs.join('; ') || '-'}</td>

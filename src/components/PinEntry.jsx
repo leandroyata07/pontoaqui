@@ -801,12 +801,14 @@ export function PinEntry() {
         }
       }
 
+      const commentText = retroDayReason?.trim() ? `Lançamento Retroativo Autorizado (${retroDayReason.trim()})` : 'Lançamento Retroativo Autorizado'
+
       const recId = await db.records.add({
         employeeId: employee.id,
         timestamp: targetDateTime.toISOString(),
         systemTimestamp: new Date().toISOString(),
         type: retroDayType,
-        comment: `Ponto Retroativo (${retroDayReason || 'Autorizado pela gestão'})`,
+        comment: commentText,
         category: 'retroactive_day',
         status: 'pending'
       })
@@ -817,7 +819,7 @@ export function PinEntry() {
         timestamp: targetDateTime.toISOString(),
         systemTimestamp: new Date().toISOString(),
         type: retroDayType,
-        comment: `Ponto Retroativo (${retroDayReason || 'Autorizado pela gestão'})`,
+        comment: commentText,
         category: 'retroactive_day',
         status: 'pending'
       })
@@ -976,7 +978,9 @@ export function PinEntry() {
       }
 
       const nowIso = new Date().toISOString()
-      const reasonText = retroBatchReason.trim() || 'Lançamento retroativo em lote do período autorizado'
+      const reasonText = retroBatchReason.trim() 
+        ? `Lançamento Retroativo Autorizado (${retroBatchReason.trim()})` 
+        : 'Lançamento Retroativo Autorizado'
 
       // Salva cada batida no Dexie e envia ao Firestore
       for (const p of punchesToCreate) {
@@ -985,7 +989,7 @@ export function PinEntry() {
           timestamp: p.timestamp,
           systemTimestamp: nowIso,
           type: p.type,
-          comment: `Ponto Retroativo (${reasonText})`,
+          comment: reasonText,
           category: 'retroactive_day',
           status: 'pending'
         }
