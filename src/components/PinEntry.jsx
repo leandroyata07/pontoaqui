@@ -26,6 +26,16 @@ const RECORD_TYPES = {
   admin_absence: { label: 'Falta Injustificada', icon: AlertCircle, color: 'bg-rose-500' }
 }
 
+// Apenas opções operacionais reais para o colaborador bater o ponto diário (sem itens administrativos)
+const PUNCH_TYPES = {
+  check_in: RECORD_TYPES.check_in,
+  lunch_out: RECORD_TYPES.lunch_out,
+  lunch_in: RECORD_TYPES.lunch_in,
+  check_out: RECORD_TYPES.check_out,
+  other_out: RECORD_TYPES.other_out,
+  other_in: RECORD_TYPES.other_in
+}
+
 export function PinEntry() {
   const { employeeId } = useParams({ from: '/pin/$employeeId' })
   const navigate = useNavigate()
@@ -1239,58 +1249,89 @@ export function PinEntry() {
   }
 
   const isTypeDisabled = (type) => {
-    const hasCheckIn = todayRecords.some(r => r.type === 'check_in')
-    const hasCheckOut = todayRecords.some(r => r.type === 'check_out')
-    const hasLunchOut = todayRecords.some(r => r.type === 'lunch_out')
+    // Apenas opções operacionais de ponto do colaborador
+    if (!['check_in', 'lunch_out', 'lunch_in', 'check_out', 'other_out', 'other_in'].includes(type)) {
+      return true
+    }
 
-    // If already checked out definitively, everything is disabled
+    const validPunches = todayRecords.filter(r => r.status !== 'rejected')
+    const hasCheckIn = validPunches.some(r => r.type === 'check_in')
+    const hasCheckOut = validPunches.some(r => r.type === 'check_out' || r.type === 'system_auto_checkout')
+    const hasLunchOut = validPunches.some(r => r.type === 'lunch_out')
+
+    // Se já bateu saída definitiva ou o sistema registrou saída automática hoje, encerra o fluxo
     if (hasCheckOut) return true
 
-    // If no records today, only "check_in" is allowed
-    if (todayRecords.length === 0) {
+    // Se ainda não tem registros hoje, apenas a Entrada Principal está liberada
+    if (validPunches.length === 0) {
       return type !== 'check_in'
     }
 
-    // If already has a check_in, you can't check_in again
+    // Se já bateu entrada, não pode bater entrada novamente
     if (type === 'check_in' && hasCheckIn) return true
 
-    // Only 1 lunch per day allowed
+    // Apenas 1 intervalo de refeição/almoço por dia
     if (type === 'lunch_out' && hasLunchOut) return true
 
-    const lastRecord = todayRecords[todayRecords.length - 1]
+    // Pega o último registro operacional do colaborador hoje
+    const operationalRecords = validPunches.filter(r => 
+      ['check_in', 'lunch_out', 'lunch_in', 'check_out', 'other_out', 'other_in'].includes(r.type)
+    )
+    if (operationalRecords.length === 0) {
+      return type !== 'check_in'
+    }
+
+    const lastRecord = operationalRecords[operationalRecords.length - 1]
     const lastType = lastRecord.type
 
     switch (lastType) {
       case 'check_in':
-        // After entry: Lunch out, Final exit, or Extra exit
+        // Após a entrada: pode sair para almoço, saída definitiva ou saída extra temporária
         return !['lunch_out', 'check_out', 'other_out'].includes(type)
 
       case 'lunch_out':
-        // During lunch: Only Lunch in allowed
+        // Em horário de almoço: única opção permitida é Retorno Refeição
         return type !== 'lunch_in'
 
       case 'lunch_in':
-        // After returning from lunch: Final exit, Extra exit
+        // Após retornar do almoço: pode bater saída definitiva ou saída extra temporária
         return !['check_out', 'other_out'].includes(type)
 
       case 'other_out':
-        // During extra exit: Only Extra in allowed
+        // Em saída extra: única opção permitida é Retorno Extra
         return type !== 'other_in'
 
       case 'other_in':
-        // After returning from extra exit: Any exit allowed
+        // Após retornar da saída extra: se já almoçou, pode saída definitiva ou nova pausa. Se não, almoço também.
+        if (hasLunchOut) {
+          return !['check_out', 'other_out'].includes(type)
+        }
         return !['lunch_out', 'check_out', 'other_out'].includes(type)
 
+      case 'check_out':
+        return true
+
       default:
-        return false
+        return true
     }
   }
 
   const getSuggestedType = () => {
-    if (todayRecords.length === 0) return 'check_in'
-    const lastType = todayRecords[todayRecords.length - 1].type
+    const validPunches = todayRecords.filter(r => r.status !== 'rejected')
+    if (validPunches.length === 0) return 'check_in'
+    
+    const operationalRecords = validPunches.filter(r => 
+      ['check_in', 'lunch_out', 'lunch_in', 'check_out', 'other_out', 'other_in'].includes(r.type)
+    )
+    if (operationalRecords.length === 0) return 'check_in'
+
+    const lastRecord = operationalRecords[operationalRecords.length - 1]
+    const lastType = lastRecord.type
+
     if (lastType === 'lunch_out') return 'lunch_in'
     if (lastType === 'other_out') return 'other_in'
+    if (lastType === 'check_out') return null
+
     if (lastType === 'check_in' || lastType === 'other_in' || lastType === 'lunch_in') {
       const now = new Date()
       const nowMin = now.getHours() * 60 + now.getMinutes()
@@ -1299,7 +1340,7 @@ export function PinEntry() {
       const lunchEndMin = employee?.lunchEnd ? toMinutes(employee.lunchEnd) : (13 * 60)
       const shiftEndMin = employee?.shiftEnd ? toMinutes(employee.shiftEnd) : (17 * 60)
 
-      const hasLunchOut = todayRecords.some(r => r.type === 'lunch_out')
+      const hasLunchOut = validPunches.some(r => r.type === 'lunch_out')
 
       // Se ainda não saiu para almoço e está na janela do horário de almoço do colaborador
       if (!hasLunchOut && nowMin >= (lunchStartMin - 45) && nowMin < lunchEndMin) {
@@ -1308,6 +1349,14 @@ export function PinEntry() {
 
       // Se está próximo ou já passou do horário de saída definitiva do colaborador
       if (nowMin >= (shiftEndMin - 45)) {
+        return 'check_out'
+      }
+
+      // Sugestão padrão sequencial conforme a rotina
+      if (lastType === 'check_in' && !hasLunchOut) {
+        return 'lunch_out'
+      }
+      if (lastType === 'lunch_in') {
         return 'check_out'
       }
     }
@@ -1864,12 +1913,62 @@ export function PinEntry() {
             )}
           </div>
 
+          {/* Banner de Expediente Concluído */}
+          {todayRecords.some(r => (r.type === 'check_out' || r.type === 'system_auto_checkout') && r.status !== 'rejected') && (
+            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center space-x-3 text-emerald-700 dark:text-emerald-300 text-xs font-bold animate-in fade-in">
+              <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+              <span>Expediente de hoje finalizado com sucesso! Todos os registros foram concluídos.</span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            {Object.entries(RECORD_TYPES).map(([key, config]) => {
+            {Object.entries(PUNCH_TYPES).map(([key, config]) => {
               const Icon = config.icon
               const isSelected = selectedType === key
               const disabled = isTypeDisabled(key)
               const isSuggested = getSuggestedType() === key
+
+              // Informações de status amigáveis baseadas no fluxo do dia
+              const getPunchStatus = () => {
+                const existing = todayRecords.find(r => r.type === key && r.status !== 'rejected')
+                if (existing) {
+                  return {
+                    text: `Concluído às ${format(new Date(existing.timestamp), 'HH:mm')}`,
+                    color: 'text-emerald-600 dark:text-emerald-400 font-bold',
+                    isDone: true
+                  }
+                }
+                if (disabled) {
+                  const hasCheckIn = todayRecords.some(r => r.type === 'check_in' && r.status !== 'rejected')
+                  const hasCheckOut = todayRecords.some(r => (r.type === 'check_out' || r.type === 'system_auto_checkout') && r.status !== 'rejected')
+                  if (hasCheckOut) {
+                    return { text: 'Expediente finalizado', color: 'text-slate-400 font-medium' }
+                  }
+                  if (!hasCheckIn && key !== 'check_in') {
+                    return { text: 'Aguardando entrada', color: 'text-slate-400 font-medium' }
+                  }
+                  if (key === 'lunch_in') {
+                    return { text: 'Aguardando saída almoço', color: 'text-slate-400 font-medium' }
+                  }
+                  if (key === 'other_in') {
+                    return { text: 'Aguardando saída extra', color: 'text-slate-400 font-medium' }
+                  }
+                  if (key === 'lunch_out' && todayRecords.some(r => r.type === 'lunch_out' && r.status !== 'rejected')) {
+                    return { text: 'Já realizado hoje', color: 'text-slate-400 font-medium' }
+                  }
+                  return { text: 'Bloqueado no momento', color: 'text-slate-400 font-medium' }
+                }
+                if (isSuggested) {
+                  return {
+                    text: 'Sugerido agora',
+                    color: 'text-blue-600 dark:text-blue-400 font-black',
+                    isSuggested: true
+                  }
+                }
+                return { text: 'Disponível para bater', color: 'text-slate-500 dark:text-slate-400 font-medium' }
+              }
+
+              const statusInfo = getPunchStatus()
 
               return (
                 <div key={key} className="space-y-2">
@@ -1891,17 +1990,26 @@ export function PinEntry() {
                       </div>
                       <div className="text-left">
                         <span className="font-bold text-base block text-slate-900 dark:text-white leading-tight">{config.label}</span>
-                        {isSuggested ? (
+                        {statusInfo.isSuggested ? (
                           <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 uppercase font-black tracking-wider mt-0.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
                             Sugerido agora
                           </span>
+                        ) : statusInfo.isDone ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold tracking-wide mt-0.5">
+                            <Check className="w-3 h-3 text-emerald-500" />
+                            {statusInfo.text}
+                          </span>
                         ) : (
-                          <span className="text-[11px] text-slate-400 font-medium">Toque para bater</span>
+                          <span className={`text-[11px] ${statusInfo.color}`}>{statusInfo.text}</span>
                         )}
                       </div>
                     </div>
-                    {!disabled && (
+                    {statusInfo.isDone ? (
+                      <div className="w-7 h-7 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                        <Check className="w-4 h-4 stroke-[3]" />
+                      </div>
+                    ) : !disabled && (
                       <div className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${isSelected ? 'bg-blue-600 text-white' : 'text-slate-300 dark:text-slate-600 group-hover:text-blue-500'}`}>
                         <Check className="w-4 h-4" />
                       </div>
