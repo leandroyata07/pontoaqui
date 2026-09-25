@@ -69,6 +69,11 @@ export function PinEntry() {
   // Notificações pessoais do colaborador (deferimentos / indeferimentos)
   const [employeeNotifications, setEmployeeNotifications] = useState([])
   const [showEmployeeNotifsModal, setShowEmployeeNotifsModal] = useState(false)
+  const [showAdminMenuModal, setShowAdminMenuModal] = useState(false)
+
+  // Quantidade de funções e ajustes autorizados pela administração
+  const activeAdminAuthCount = (employee?.allowDayCorrection && employee?.dayCorrectionDate ? 1 : 0) +
+    (employee?.allowRetroactive && employee?.retroactiveStart && employee?.retroactiveEnd ? 1 : 0)
 
   // Ajuste de Ponto Esquecido no mesmo dia
   const [isForgottenOpen, setIsForgottenOpen] = useState(false)
@@ -401,7 +406,7 @@ export function PinEntry() {
 
         if (isMounted) {
           setSingleDayRecords(dayPunches)
-          
+
           // Se o dia já tem entrada e saída principal (jornada padrão preenchida),
           // direciona automaticamente para Saída Extra para evitar duplicidade
           const hasCheckIn = dayPunches.some(r => r.type === 'check_in')
@@ -727,6 +732,7 @@ export function PinEntry() {
     setExtraCategory('esquecimento')
     setReason(forgottenReason)
     setIsForgottenOpen(false)
+    setShowAdminMenuModal(false)
     setStep('camera')
   }
 
@@ -988,8 +994,8 @@ export function PinEntry() {
       }
 
       const nowIso = new Date().toISOString()
-      const reasonText = retroBatchReason.trim() 
-        ? `Lançamento Retroativo Autorizado (${retroBatchReason.trim()})` 
+      const reasonText = retroBatchReason.trim()
+        ? `Lançamento Retroativo Autorizado (${retroBatchReason.trim()})`
         : 'Lançamento Retroativo Autorizado'
 
       // Salva cada batida no Dexie e envia ao Firestore
@@ -1274,7 +1280,7 @@ export function PinEntry() {
     if (type === 'lunch_out' && hasLunchOut) return true
 
     // Pega o último registro operacional do colaborador hoje
-    const operationalRecords = validPunches.filter(r => 
+    const operationalRecords = validPunches.filter(r =>
       ['check_in', 'lunch_out', 'lunch_in', 'check_out', 'other_out', 'other_in'].includes(r.type)
     )
     if (operationalRecords.length === 0) {
@@ -1319,8 +1325,8 @@ export function PinEntry() {
   const getSuggestedType = () => {
     const validPunches = todayRecords.filter(r => r.status !== 'rejected')
     if (validPunches.length === 0) return 'check_in'
-    
-    const operationalRecords = validPunches.filter(r => 
+
+    const operationalRecords = validPunches.filter(r =>
       ['check_in', 'lunch_out', 'lunch_in', 'check_out', 'other_out', 'other_in'].includes(r.type)
     )
     if (operationalRecords.length === 0) return 'check_in'
@@ -1417,8 +1423,8 @@ export function PinEntry() {
                 <p className="text-xs text-slate-400 dark:text-slate-400 mt-0.5 font-medium">Digite seu PIN de 4 dígitos</p>
                 {employee.autoPunchEnabled && (
                   <div className={`mt-3 px-3 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider inline-flex items-center space-x-1.5 ${autoPunchTelemetry?.isInside
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
                     }`}>
                     <MapPin className="w-3 h-3 shrink-0 animate-pulse" />
                     <span>
@@ -1437,10 +1443,10 @@ export function PinEntry() {
                 <div
                   key={i}
                   className={`w-4 h-4 rounded-full transition-all duration-300 ${pin.length > i
-                      ? 'bg-blue-600 border-2 border-blue-400 shadow-md shadow-blue-500/40 scale-125'
-                      : error
-                        ? 'border-2 border-red-500 bg-red-500/20 animate-pulse'
-                        : 'border-2 border-slate-300 dark:border-slate-700 bg-slate-200/50 dark:bg-white/5'
+                    ? 'bg-blue-600 border-2 border-blue-400 shadow-md shadow-blue-500/40 scale-125'
+                    : error
+                      ? 'border-2 border-red-500 bg-red-500/20 animate-pulse'
+                      : 'border-2 border-slate-300 dark:border-slate-700 bg-slate-200/50 dark:bg-white/5'
                     }`}
                 />
               ))}
@@ -1474,8 +1480,8 @@ export function PinEntry() {
                 onClick={(e) => { e.stopPropagation(); handlePinSubmit() }}
                 disabled={pin.length < 4}
                 className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all active:scale-90 ${pin.length === 4
-                    ? 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/30 hover:scale-105'
-                    : 'text-slate-300 dark:text-slate-700 bg-slate-100 dark:bg-white/5 cursor-not-allowed'
+                  ? 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/30 hover:scale-105'
+                  : 'text-slate-300 dark:text-slate-700 bg-slate-100 dark:bg-white/5 cursor-not-allowed'
                   }`}
                 title="Confirmar"
               >
@@ -1517,8 +1523,8 @@ export function PinEntry() {
                   </span>
                   {employee.autoPunchEnabled && (
                     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border shrink-0 ${autoPunchTelemetry?.isInside
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-                        : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                      : 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400'
                       }`}>
                       <MapPin className="w-2.5 h-2.5 shrink-0 animate-pulse" />
                       <span>{autoPunchTelemetry ? `${autoPunchTelemetry.isInside ? 'Na Sala' : 'Fora'} (${autoPunchTelemetry.distance}m)` : 'Auto-Ponto Ativo'}</span>
@@ -1528,22 +1534,44 @@ export function PinEntry() {
               </div>
             </div>
 
-            {/* Botão de Histórico de Notificações */}
-            {employeeNotifications.length > 0 && (
+            {/* Ações do Colaborador: Menu de Ajustes/Funções + Notificações */}
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setShowEmployeeNotifsModal(true)}
-                className="relative p-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-all border border-slate-200 dark:border-white/10 shrink-0"
-                title="Minhas Notificações"
+                onClick={() => setShowAdminMenuModal(true)}
+                className={`relative flex items-center gap-2 px-3.5 py-2.5 rounded-2xl font-black text-xs transition-all border shrink-0 active:scale-95 shadow-sm ${
+                  activeAdminAuthCount > 0
+                    ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border-amber-500/40 shadow-amber-500/10'
+                    : 'bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-white/10'
+                }`}
+                title="Ajustes e Funções Autorizadas pelo Gestor"
               >
-                <Bell className="w-5 h-5" />
-                {employeeNotifications.filter(n => !n.read).length > 0 && (
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center animate-pulse shadow-sm">
-                    {employeeNotifications.filter(n => !n.read).length}
+                <Layers className={`w-4 h-4 ${activeAdminAuthCount > 0 ? 'text-amber-500' : 'text-slate-500'}`} />
+                <span className="hidden sm:inline">Ajustes</span>
+                {activeAdminAuthCount > 0 && (
+                  <span className="w-5 h-5 bg-amber-500 text-white text-[10px] font-black rounded-full flex items-center justify-center animate-pulse shadow-sm">
+                    {activeAdminAuthCount}
                   </span>
                 )}
               </button>
-            )}
+
+              {/* Botão de Histórico de Notificações */}
+              {employeeNotifications.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowEmployeeNotifsModal(true)}
+                  className="relative p-3 rounded-2xl bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 transition-all border border-slate-200 dark:border-white/10 shrink-0"
+                  title="Minhas Notificações"
+                >
+                  <Bell className="w-5 h-5" />
+                  {employeeNotifications.filter(n => !n.read).length > 0 && (
+                    <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center animate-pulse shadow-sm">
+                      {employeeNotifications.filter(n => !n.read).length}
+                    </span>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Cards de Notificações Não Lidas (Especialmente Indeferimentos) */}
@@ -1553,8 +1581,8 @@ export function PinEntry() {
                 <div
                   key={notif.id}
                   className={`p-6 rounded-3xl border-2 shadow-xl space-y-4 animate-in slide-in-from-top-3 ${notif.type === 'request_rejected'
-                      ? 'bg-red-50 dark:bg-[#1a0b0e] border-red-300 dark:border-red-500/40 shadow-red-500/10'
-                      : 'bg-emerald-50 dark:bg-[#091a12] border-emerald-300 dark:border-emerald-500/40 shadow-emerald-500/10'
+                    ? 'bg-red-50 dark:bg-[#1a0b0e] border-red-300 dark:border-red-500/40 shadow-red-500/10'
+                    : 'bg-emerald-50 dark:bg-[#091a12] border-emerald-300 dark:border-emerald-500/40 shadow-emerald-500/10'
                     }`}
                 >
                   <div className="flex items-start space-x-4">
@@ -1679,6 +1707,181 @@ export function PinEntry() {
             </div>
           )}
 
+          {/* Modal Central de Ajustes e Funções Autorizadas pelo Admin */}
+          {showAdminMenuModal && (
+            <div
+              className="fixed inset-0 z-[150] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+              onClick={() => setShowAdminMenuModal(false)}
+            >
+              <div
+                className="relative max-w-lg w-full bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-7 border border-slate-200 dark:border-white/10 shadow-2xl space-y-5 animate-in zoom-in duration-200 max-h-[90vh] flex flex-col"
+                onClick={e => e.stopPropagation()}
+              >
+                {/* Cabeçalho do Sub Menu */}
+                <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-white/10">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+                      <Layers className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900 dark:text-white">Ajustes & Funções</h3>
+                      <p className="text-[10px] text-slate-400 font-bold">Recursos autorizados pela gestão e declarações</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminMenuModal(false)}
+                    className="p-2 text-slate-400 hover:text-slate-800 dark:hover:text-white rounded-xl transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Conteúdo rolável */}
+                <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                  {/* Seção 1: Correção de Ponto Autorizada (Ajuste de Dia) */}
+                  {employee?.allowDayCorrection && employee?.dayCorrectionDate && (
+                    <div className="p-5 bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-amber-500/10 border border-amber-500/30 rounded-2xl space-y-3 shadow-sm">
+                      <div className="flex items-start space-x-3.5">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-md shadow-amber-500/30 shrink-0">
+                          <RotateCcw className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-black text-slate-900 dark:text-white text-sm">Correção de Ponto Autorizada</h4>
+                            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-md bg-amber-500 text-white tracking-wider">Ajuste de Dia</span>
+                          </div>
+                          <p className="text-xs text-amber-800 dark:text-amber-300 font-medium mt-1 leading-relaxed">
+                            A administração autorizou você a lançar manualmente as batidas do dia <strong>{format(new Date(employee.dayCorrectionDate + 'T12:00:00'), 'dd/MM/yyyy')}</strong> após exclusão dos registros anteriores.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAdminMenuModal(false)
+                          handleOpenDayCorrection()
+                        }}
+                        className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-xl font-black text-xs uppercase tracking-wider transition-all shadow-md shadow-amber-500/20 active:scale-95 flex items-center justify-center gap-2"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Lançar Batidas do Dia</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Seção 2: Inclusão de Dias Anteriores Liberada */}
+                  {employee?.allowRetroactive && employee?.retroactiveStart && employee?.retroactiveEnd && (
+                    <div className="p-5 bg-indigo-600/10 border border-indigo-500/30 rounded-2xl space-y-3 shadow-sm">
+                      <div className="flex items-start space-x-3.5">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-md shadow-indigo-600/30 shrink-0">
+                          <Calendar className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-black text-slate-900 dark:text-white text-sm">Inclusão de Dias Anteriores</h4>
+                            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-md bg-indigo-600 text-white tracking-wider">Lote / Avulso</span>
+                          </div>
+                          <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1 leading-relaxed">
+                            Autorizado de <strong>{format(new Date(employee.retroactiveStart + 'T12:00:00'), 'dd/MM/yyyy')}</strong> até <strong>{format(new Date(employee.retroactiveEnd + 'T12:00:00'), 'dd/MM/yyyy')}</strong>.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAdminMenuModal(false)
+                          setStep('retroactive_day')
+                        }}
+                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-xs uppercase tracking-wider transition-all shadow-md shadow-indigo-600/20 active:scale-95 flex items-center justify-center gap-2"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        <span>Lançar Pontos do Período</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Mensagem se não houver autorizações especiais ativas */}
+                  {activeAdminAuthCount === 0 && (
+                    <div className="p-4 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl text-center space-y-1">
+                      <p className="text-xs font-bold text-slate-600 dark:text-slate-300">Nenhuma autorização de retroativo ou ajuste pendente</p>
+                      <p className="text-[10px] text-slate-400">Quando a administração liberar correções ou inclusões de períodos passados, elas aparecerão aqui.</p>
+                    </div>
+                  )}
+
+                  {/* Seção 3: Declaração de Chegada / Ponto Esquecido no Mesmo Dia */}
+                  <div className="p-5 bg-orange-500/10 border border-orange-500/30 rounded-2xl space-y-4">
+                    <div className="flex items-start space-x-3">
+                      <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center shadow-md shadow-orange-500/20 shrink-0">
+                        <Clock className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-black text-slate-900 dark:text-white text-sm">Esqueceu de bater no horário exato?</h4>
+                        <p className="text-xs text-orange-600 dark:text-orange-400 font-medium mt-0.5">Declare a sua chegada retroativa no dia de hoje para aprovação da administração</p>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-white/90 dark:bg-black/40 rounded-xl border border-orange-500/20 space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Tipo de Registro</label>
+                          <select
+                            value={forgottenType}
+                            onChange={e => setForgottenType(e.target.value)}
+                            className="w-full p-2.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-bold text-xs outline-none focus:ring-2 focus:ring-orange-500"
+                          >
+                            <option value="check_in">Entrada Principal</option>
+                            <option value="lunch_in">Retorno Refeição (Volta do Almoço)</option>
+                            <option value="check_out">Saída Definitiva</option>
+                            <option value="lunch_out">Saída Refeição</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Horário Real em que Chegou</label>
+                          <input
+                            type="time"
+                            value={forgottenTime}
+                            onChange={e => setForgottenTime(e.target.value)}
+                            className="w-full p-2 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-black text-base text-center outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Justificativa do Esquecimento</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Cheguei às 08h, fui direto atender cliente e esqueci..."
+                          value={forgottenReason}
+                          onChange={e => setForgottenReason(e.target.value)}
+                          className="w-full p-2.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-orange-500"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleStartForgottenRecord}
+                        className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white font-black rounded-xl text-xs uppercase tracking-widest transition-all shadow-md shadow-orange-500/20 active:scale-95 flex items-center justify-center space-x-2"
+                      >
+                        <Camera className="w-4 h-4" />
+                        <span>Foto Selfie & Confirmar Declaração</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rodapé */}
+                <button
+                  type="button"
+                  onClick={() => setShowAdminMenuModal(false)}
+                  className="w-full py-3 bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-slate-300 font-black rounded-2xl text-xs uppercase tracking-wider hover:bg-slate-200 dark:hover:bg-white/10 transition-all shrink-0"
+                >
+                  Fechar Menu
+                </button>
+              </div>
+            </div>
+          )}
+
           {isDemo && (
             <div className="p-6 bg-orange-500/10 border border-orange-500/20 rounded-[2.5rem] space-y-4 animate-in slide-in-from-top-4 duration-500">
               <div className="flex items-center justify-between">
@@ -1718,10 +1921,10 @@ export function PinEntry() {
           {/* Card de Banco de Horas em Tempo Real */}
           {timeBank && (
             <div className={`p-6 rounded-[2rem] border transition-all shadow-lg space-y-4 ${timeBank.status === 'credit'
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100 shadow-emerald-500/5'
-                : timeBank.status === 'debt'
-                  ? 'bg-red-500/10 border-red-500/30 text-red-950 dark:text-red-100 shadow-red-500/5'
-                  : 'bg-blue-500/10 border-blue-500/30 text-blue-950 dark:text-blue-100 shadow-blue-500/5'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100 shadow-emerald-500/5'
+              : timeBank.status === 'debt'
+                ? 'bg-red-500/10 border-red-500/30 text-red-950 dark:text-red-100 shadow-red-500/5'
+                : 'bg-blue-500/10 border-blue-500/30 text-blue-950 dark:text-blue-100 shadow-blue-500/5'
               }`}>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center space-x-3.5">
@@ -1753,10 +1956,10 @@ export function PinEntry() {
 
                 <div className="text-right shrink-0">
                   <span className={`px-3.5 py-1.5 rounded-2xl text-xs font-black font-mono inline-block tracking-tight ${timeBank.status === 'credit'
-                      ? 'bg-emerald-500 text-white shadow-sm'
-                      : timeBank.status === 'debt'
-                        ? 'bg-red-500 text-white shadow-sm'
-                        : 'bg-blue-500 text-white shadow-sm'
+                    ? 'bg-emerald-500 text-white shadow-sm'
+                    : timeBank.status === 'debt'
+                      ? 'bg-red-500 text-white shadow-sm'
+                      : 'bg-blue-500 text-white shadow-sm'
                     }`}>
                     {timeBank.balanceFormatted}
                   </span>
@@ -1791,127 +1994,43 @@ export function PinEntry() {
             </div>
           )}
 
-          {/* Banner de Liberação de Correção de Dia Excluído */}
-          {employee?.allowDayCorrection && employee?.dayCorrectionDate && (
-            <div className="p-6 bg-gradient-to-r from-amber-500/15 via-orange-500/15 to-amber-500/10 border border-amber-500/30 rounded-[2rem] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in slide-in-from-top-3 shadow-lg shadow-amber-500/5">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-lg shadow-amber-500/30 shrink-0">
-                  <RotateCcw className="w-6 h-6" />
+          {/* Alerta Discreto de Funções Autorizadas pela Administração */}
+          {activeAdminAuthCount > 0 && (
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setShowAdminMenuModal(true)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowAdminMenuModal(true) }}
+              className="p-3.5 px-4 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-500/10 border border-amber-500/30 hover:border-amber-500/50 rounded-2xl flex items-center justify-between cursor-pointer transition-all hover:scale-[1.005] active:scale-[0.995] shadow-sm group"
+            >
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-md shadow-amber-500/20 shrink-0">
+                  <Sparkles className="w-4 h-4" />
                 </div>
-                <div>
+                <div className="truncate">
                   <div className="flex items-center gap-2">
-                    <h4 className="font-black text-slate-900 dark:text-white text-base">Correção de Ponto Autorizada</h4>
-                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-md bg-amber-500 text-white tracking-wider">Ajuste de Dia</span>
+                    <span className="font-extrabold text-xs text-slate-900 dark:text-white">
+                      {activeAdminAuthCount} {activeAdminAuthCount === 1 ? 'função autorizada' : 'funções autorizadas'} pela gestão
+                    </span>
+                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500 text-white tracking-wider">
+                      Liberado
+                    </span>
                   </div>
-                  <p className="text-xs text-amber-800 dark:text-amber-300 font-medium mt-0.5">
-                    A administração autorizou você a lançar manualmente as batidas do dia <strong>{format(new Date(employee.dayCorrectionDate + 'T12:00:00'), 'dd/MM/yyyy')}</strong> após exclusão dos registros anteriores.
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300 font-medium truncate mt-0.5">
+                    {employee?.allowDayCorrection && employee?.dayCorrectionDate && `Correção do dia ${format(new Date(employee.dayCorrectionDate + 'T12:00:00'), 'dd/MM/yyyy')}`}
+                    {employee?.allowDayCorrection && employee?.dayCorrectionDate && employee?.allowRetroactive && ' • '}
+                    {employee?.allowRetroactive && 'Inclusão de dias anteriores'}
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => handleOpenDayCorrection()}
-                className="w-full sm:w-auto px-6 py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-2xl font-black text-xs uppercase tracking-wider transition-all shadow-lg shadow-amber-500/25 active:scale-95 shrink-0"
-              >
-                Lançar Batidas do Dia
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0 ml-3">
+                <span className="text-xs font-black text-amber-600 dark:text-amber-400 group-hover:underline">
+                  Acessar Menu
+                </span>
+                <ChevronRight className="w-4 h-4 text-amber-600 dark:text-amber-400 group-hover:translate-x-0.5 transition-transform" />
+              </div>
             </div>
           )}
-
-          {/* Banner de Liberação de Dias Anteriores */}
-          {employee?.allowRetroactive && employee?.retroactiveStart && employee?.retroactiveEnd && (
-            <div className="p-6 bg-indigo-600/10 border border-indigo-500/30 rounded-[2rem] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in slide-in-from-top-3">
-              <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30 shrink-0">
-                  <Calendar className="w-6 h-6" />
-                </div>
-                <div>
-                  <h4 className="font-black text-slate-900 dark:text-white text-base">Inclusão de Dias Anteriores Liberada</h4>
-                  <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">
-                    Autorizado de {format(new Date(employee.retroactiveStart + 'T12:00:00'), 'dd/MM/yyyy')} até {format(new Date(employee.retroactiveEnd + 'T12:00:00'), 'dd/MM/yyyy')}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setStep('retroactive_day')}
-                className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-xs uppercase tracking-wider transition-all shadow-lg shadow-indigo-600/20 active:scale-95 shrink-0"
-              >
-                Lançar Pontos
-              </button>
-            </div>
-          )}
-
-          {/* Card de Ponto Esquecido no Mesmo Dia */}
-          <div className="p-6 bg-orange-500/10 border border-orange-500/30 rounded-[2rem] space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-2xl bg-orange-500 text-white flex items-center justify-center shadow-lg shadow-orange-500/20 shrink-0">
-                  <Clock className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-black text-slate-900 dark:text-white text-sm">Esqueceu de bater no horário exato?</h4>
-                  <p className="text-xs text-orange-600 dark:text-orange-400 font-medium">Declare a sua chegada retroativa para aprovação da administração</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsForgottenOpen(!isForgottenOpen)}
-                className="w-full sm:w-auto px-5 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-black text-xs uppercase tracking-wider transition-all shadow-md shadow-orange-500/20 active:scale-95 shrink-0"
-              >
-                {isForgottenOpen ? 'Fechar Declaração' : 'Declarar Chegada'}
-              </button>
-            </div>
-
-            {isForgottenOpen && (
-              <div className="p-5 bg-white/80 dark:bg-black/50 rounded-2xl border border-orange-500/20 space-y-4 animate-in zoom-in duration-300">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Tipo de Registro</label>
-                    <select
-                      value={forgottenType}
-                      onChange={e => setForgottenType(e.target.value)}
-                      className="w-full p-3.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-bold text-xs outline-none focus:ring-2 focus:ring-orange-500"
-                    >
-                      <option value="check_in">Entrada Principal</option>
-                      <option value="lunch_in">Retorno Refeição (Volta do Almoço)</option>
-                      <option value="check_out">Saída Definitiva</option>
-                      <option value="lunch_out">Saída Refeição</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Horário Real em que Chegou</label>
-                    <input
-                      type="time"
-                      value={forgottenTime}
-                      onChange={e => setForgottenTime(e.target.value)}
-                      className="w-full p-3 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-black text-lg text-center outline-none focus:ring-2 focus:ring-orange-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Justificativa do Esquecimento</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Cheguei às 08h, fui direto atender cliente e esqueci de registrar..."
-                    value={forgottenReason}
-                    onChange={e => setForgottenReason(e.target.value)}
-                    className="w-full p-3.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleStartForgottenRecord}
-                  className="w-full py-4 bg-orange-500 hover:bg-orange-600 text-white font-black rounded-xl text-xs uppercase tracking-widest transition-all shadow-lg shadow-orange-500/20 active:scale-95 flex items-center justify-center space-x-2"
-                >
-                  <Camera className="w-4 h-4" />
-                  <span>Prosseguir para Foto Selfie e Confirmar</span>
-                </button>
-              </div>
-            )}
-          </div>
 
           {/* Banner de Expediente Concluído */}
           {todayRecords.some(r => (r.type === 'check_out' || r.type === 'system_auto_checkout') && r.status !== 'rejected') && (
@@ -1976,12 +2095,12 @@ export function PinEntry() {
                     disabled={disabled}
                     onClick={() => handleRecord(key)}
                     className={`w-full p-4 rounded-2xl border transition-all flex items-center justify-between group active:scale-[0.98] ${disabled
-                        ? 'opacity-35 grayscale cursor-not-allowed bg-slate-100/50 dark:bg-slate-900/30 border-slate-200/50 dark:border-white/5'
-                        : isSelected
-                          ? 'glass-card border-blue-500/80 ring-2 ring-blue-500/40 shadow-lg shadow-blue-500/10'
-                          : isSuggested
-                            ? 'bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/15 shadow-md shadow-blue-500/10'
-                            : 'glass-card border-slate-200/80 dark:border-white/5 hover:border-slate-300 dark:hover:border-white/20'
+                      ? 'opacity-35 grayscale cursor-not-allowed bg-slate-100/50 dark:bg-slate-900/30 border-slate-200/50 dark:border-white/5'
+                      : isSelected
+                        ? 'glass-card border-blue-500/80 ring-2 ring-blue-500/40 shadow-lg shadow-blue-500/10'
+                        : isSuggested
+                          ? 'bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/15 shadow-md shadow-blue-500/10'
+                          : 'glass-card border-slate-200/80 dark:border-white/5 hover:border-slate-300 dark:hover:border-white/20'
                       }`}
                   >
                     <div className="flex items-center space-x-3.5">
@@ -2427,8 +2546,8 @@ export function PinEntry() {
                 if (retroDaysList.length === 0) initRetroDays(employee)
               }}
               className={`py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${retroMode === 'batch'
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
             >
               <Sparkles className="w-4 h-4" />
@@ -2438,8 +2557,8 @@ export function PinEntry() {
               type="button"
               onClick={() => setRetroMode('single')}
               className={`py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center space-x-2 ${retroMode === 'single'
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                 }`}
             >
               <Clock className="w-4 h-4" />
@@ -2606,8 +2725,8 @@ export function PinEntry() {
                       <div
                         key={day.dateStr}
                         className={`p-4 md:p-5 rounded-2xl border transition-all ${day.selected
-                            ? 'bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-500/30 shadow-sm'
-                            : 'bg-slate-50/50 dark:bg-black/20 border-black/5 dark:border-white/5 opacity-70'
+                          ? 'bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-500/30 shadow-sm'
+                          : 'bg-slate-50/50 dark:bg-black/20 border-black/5 dark:border-white/5 opacity-70'
                           }`}
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2628,13 +2747,12 @@ export function PinEntry() {
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
-                                  day.isHoliday
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${day.isHoliday
                                     ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30'
                                     : day.isWorkDay
-                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                                    : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
-                                }`}>
+                                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                      : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-400'
+                                  }`}>
                                   {day.workDayLabel}
                                 </span>
                                 {day.isHoliday && day.selected && (
@@ -2871,18 +2989,18 @@ export function PinEntry() {
 
           {timeBank && (
             <div className={`p-5 rounded-3xl border shadow-lg space-y-3 ${timeBank.status === 'credit'
-                ? 'bg-emerald-500/10 border-emerald-500/30'
-                : timeBank.status === 'debt'
-                  ? 'bg-red-500/10 border-red-500/30'
-                  : 'bg-blue-500/10 border-blue-500/30'
+              ? 'bg-emerald-500/10 border-emerald-500/30'
+              : timeBank.status === 'debt'
+                ? 'bg-red-500/10 border-red-500/30'
+                : 'bg-blue-500/10 border-blue-500/30'
               }`}>
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">Banco de Horas (Mês Atual)</span>
                 <span className={`px-2.5 py-0.5 rounded-lg text-xs font-black font-mono ${timeBank.status === 'credit'
-                    ? 'bg-emerald-500 text-white'
-                    : timeBank.status === 'debt'
-                      ? 'bg-red-500 text-white'
-                      : 'bg-blue-500 text-white'
+                  ? 'bg-emerald-500 text-white'
+                  : timeBank.status === 'debt'
+                    ? 'bg-red-500 text-white'
+                    : 'bg-blue-500 text-white'
                   }`}>
                   {timeBank.balanceFormatted}
                 </span>
@@ -2940,8 +3058,8 @@ export function PinEntry() {
                           )}
                           {['medico', 'esquecimento', 'retroactive_day'].includes(r.category) && (
                             <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${r.status === 'pending' ? 'bg-orange-500/20 text-orange-500' :
-                                r.status === 'approved' ? 'bg-emerald-500/20 text-emerald-500' :
-                                  'bg-red-500/20 text-red-500'
+                              r.status === 'approved' ? 'bg-emerald-500/20 text-emerald-500' :
+                                'bg-red-500/20 text-red-500'
                               }`}>
                               {r.status === 'pending' ? 'Pendente' : r.status === 'approved' ? 'Deferido' : 'Indeferido'}
                             </span>
@@ -3138,12 +3256,12 @@ export function PinEntry() {
           <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border border-slate-200/80 dark:border-white/10 p-6 md:p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center space-y-5 transform transition-all animate-in zoom-in-95 duration-200">
             <div className="flex justify-center">
               <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border shadow-lg ${feedbackModal.type === 'success'
-                  ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10'
-                  : feedbackModal.type === 'warning'
-                    ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 shadow-amber-500/10'
-                    : feedbackModal.type === 'error'
-                      ? 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10'
-                      : 'bg-blue-500/10 text-blue-500 border-blue-500/20 shadow-blue-500/10'
+                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 shadow-emerald-500/10'
+                : feedbackModal.type === 'warning'
+                  ? 'bg-amber-500/10 text-amber-500 border-amber-500/20 shadow-amber-500/10'
+                  : feedbackModal.type === 'error'
+                    ? 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-rose-500/10'
+                    : 'bg-blue-500/10 text-blue-500 border-blue-500/20 shadow-blue-500/10'
                 }`}>
                 {feedbackModal.type === 'success' && <CheckCircle2 className="w-8 h-8" />}
                 {feedbackModal.type === 'warning' && <ShieldAlert className="w-8 h-8" />}
