@@ -37,7 +37,12 @@ export function calculateDayWorkedMinutes(dayRecords = [], isToday = false) {
   let hasVacation = valid.some(r => r.type === 'admin_vacation')
   let hasAbsence = valid.some(r => r.type === 'admin_absence')
 
+  let partialAbonoMin = 0
+
   valid.forEach(r => {
+    if (r.type === 'admin_partial_abono') {
+      partialAbonoMin += (Number(r.abonoMinutes) || 0)
+    }
     if (['check_in', 'lunch_in', 'other_in'].includes(r.type)) {
       if (!isWorking) {
         isWorking = true
@@ -60,6 +65,7 @@ export function calculateDayWorkedMinutes(dayRecords = [], isToday = false) {
 
   return {
     workedMin,
+    partialAbonoMin,
     isWorking,
     hasExcused,
     hasAbonada,
@@ -156,9 +162,14 @@ export function calculateEmployeeMonthBalance(emp, allRecords = [], holidays = [
       }
     } else if (isScheduledWorkDay) {
       totalExpectedMin += dailyExpectedMin
-      if (dayCalc.workedMin === 0 && !isToday) {
+      if (dayCalc.workedMin === 0 && dayCalc.partialAbonoMin === 0 && !isToday) {
         absenceDaysCount++
       }
+    }
+
+    // Abono parcial de horas para compensação de saídas antecipadas, atrasos ou dispensas parciais
+    if (dayCalc.partialAbonoMin > 0 && !dayCalc.hasExcused) {
+      totalExcusedMin += dayCalc.partialAbonoMin
     }
 
     let workedMin = dayCalc.workedMin

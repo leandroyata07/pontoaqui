@@ -122,7 +122,8 @@ const RECORD_TYPES = {
   system_auto_checkout: { label: 'SAÍDA AUTOMÁTICA', color: 'bg-red-500/10 text-red-500' },
   admin_absence: { label: 'FALTA INJUSTIFICADA', color: 'bg-red-900/30 text-red-400 border border-red-500/30' },
   admin_excused: { label: 'ATESTADO MÉDICO / LICENÇA', color: 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/30' },
-  admin_abonada: { label: 'FALTA ABONADA', color: 'bg-teal-900/30 text-teal-400 border border-teal-500/30' },
+  admin_abonada: { label: 'FALTA ABONADA (DIA INTEIRO)', color: 'bg-teal-900/30 text-teal-400 border border-teal-500/30' },
+  admin_partial_abono: { label: 'ABONO PARCIAL DE HORAS', color: 'bg-teal-500/20 text-teal-600 dark:text-teal-400 border border-teal-500/30' },
   admin_vacation: { label: 'FÉRIAS', color: 'bg-cyan-900/30 text-cyan-400 border border-cyan-500/30' },
   admin_adjustment: { label: 'AJUSTE MANUAL', color: 'bg-blue-600/20 text-blue-500 border border-blue-500/30' },
   superseded: { label: 'SUBSTITUÍDO (AJUSTADO)', color: 'bg-slate-500/10 text-slate-400 opacity-50 line-through' }
@@ -2084,9 +2085,10 @@ function ReportsManager({ employees, departments, onDataChange }) {
   const [config, setConfig] = useState(null)
   const [manualEntryData, setManualEntryData] = useState({
     employeeId: '',
-    type: 'admin_abonada',
+    type: 'admin_partial_abono',
     startDate: format(new Date(), 'yyyy-MM-dd'),
     endDate: format(new Date(), 'yyyy-MM-dd'),
+    abonoTime: '00:40',
     comment: ''
   })
   const [adjustmentData, setAdjustmentData] = useState({
@@ -2414,6 +2416,13 @@ function ReportsManager({ employees, departments, onDataChange }) {
           if (r.type === 'admin_abonada') {
             dailyData[date].isAbonada = true
             dailyData[date].obs.push(`FALTA ABONADA: ${r.comment ? r.comment.toUpperCase() : 'AUTORIZADA PELA GESTÃO'}`)
+          } else if (r.type === 'admin_partial_abono') {
+            const pMin = Number(r.abonoMinutes) || 0
+            dailyData[date].partialAbonoMin = (dailyData[date].partialAbonoMin || 0) + pMin
+            const hrs = Math.floor(pMin / 60)
+            const mins = pMin % 60
+            const abonoFormatted = `${hrs > 0 ? `${hrs}h ` : ''}${mins.toString().padStart(2, '0')}m`
+            dailyData[date].obs.push(`ABONO PARCIAL (+${abonoFormatted}): ${r.comment ? r.comment.toUpperCase() : 'AUTORIZADO PELA GESTÃO'}`)
           } else if (r.type === 'admin_excused') {
             dailyData[date].isExcused = true
             dailyData[date].obs.push(`ATESTADO MÉDICO: ${r.comment ? r.comment.toUpperCase() : 'APRESENTOU COMPROVANTE'}`)
@@ -2480,6 +2489,20 @@ function ReportsManager({ employees, departments, onDataChange }) {
           if (data.workedMin === 0) dailyTotalStr = `FÉRIAS`
         } else if (data.isAbsence && data.workedMin === 0) {
           dailyTotalStr = `FALTA`
+        }
+
+        // Suporte ao Abono Parcial de Horas
+        if (data.partialAbonoMin > 0 && !data.isAbonada && !data.isExcused && !data.isVacation) {
+          effectiveExcused += data.partialAbonoMin
+          totalExcusedMin += data.partialAbonoMin
+          const hrs = Math.floor(data.partialAbonoMin / 60)
+          const mins = data.partialAbonoMin % 60
+          const abonoFormatted = `${hrs > 0 ? `${hrs}h ` : ''}${mins.toString().padStart(2, '0')}m`
+          if (dailyTotalStr !== '-') {
+            dailyTotalStr += ` [+${abonoFormatted}]`
+          } else {
+            dailyTotalStr = `ABONO (${abonoFormatted})`
+          }
         }
 
         // Compute positive overtime on this day
@@ -2641,6 +2664,55 @@ function ReportsManager({ employees, departments, onDataChange }) {
       alert('Preencha o funcionário e a justificativa.')
       return
     }
+
+    if (manualEntryData.type === 'admin_partial_abono') {
+      const [abonoH, abonoM] = (manualEntryData.abonoTime || '00:00').split(':').map(Number)
+      const totalAbonoMinutes = (abonoH || 0) * 60 + (abonoM || 0)
+
+      if (totalAbonoMinutes <= 0) {
+        alert('Informe a quantidade de horas/minutos a serem abonados.')
+        return
+      }
+
+      const dateStr = manualEntryData.startDate
+      const targetEmp = employees.find(e => e.id === Number(manualEntryData.employeeId))
+      const timeFormatted = `${abonoH > 0 ? `${abonoH}h ` : ''}${abonoM.toString().padStart(2, '0')}m`
+
+      const rec = {
+        employeeId: Number(manualEntryData.employeeId),
+        employeeName: targetEmp?.name || '',
+        employeeCpf: targetEmp?.cpf || '',
+        timestamp: new Date(`${dateStr}T12:00:00`).toISOString(),
+        type: 'admin_partial_abono',
+        abonoMinutes: totalAbonoMinutes,
+        comment: `Abono Parcial (+${timeFormatted}): ${manualEntryData.comment.trim()}`,
+        status: 'approved'
+      }
+
+      const recId = await db.records.add(rec)
+      await pushDocToFirestore('records', recId, { ...rec, id: recId })
+
+      // Notifica o colaborador
+      const notif = {
+        employeeId: Number(manualEntryData.employeeId),
+        target: 'employee',
+        type: 'admin_abono',
+        title: 'Abono Parcial de Horas',
+        message: `A administração concedeu um abono parcial de +${timeFormatted} para o dia ${format(new Date(dateStr + 'T12:00:00'), 'dd/MM/yyyy')}. Motivo: ${manualEntryData.comment.trim()}`,
+        timestamp: new Date().toISOString(),
+        read: false
+      }
+      const notifId = await db.notifications.add(notif)
+      await pushDocToFirestore('notifications', notifId, { ...notif, id: notifId })
+
+      setShowManualEntry(false)
+      setManualEntryData({ ...manualEntryData, comment: '', abonoTime: '00:40' })
+      loadRecords()
+      onDataChange()
+      alert(`Abono parcial de +${timeFormatted} lançado com sucesso para ${targetEmp?.name || 'o colaborador'}!`)
+      return
+    }
+
     const start = new Date(`${manualEntryData.startDate}T08:00:00`)
     const end = new Date(`${manualEntryData.endDate}T08:00:00`)
     const days = differenceInDays(end, start)
@@ -2669,6 +2741,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
     setShowManualEntry(false)
     setManualEntryData({...manualEntryData, comment: ''})
     loadRecords()
+    onDataChange()
     alert(`${newRecords.length} registro(s) inserido(s) com sucesso.`)
   }
 
@@ -2810,25 +2883,74 @@ function ReportsManager({ employees, departments, onDataChange }) {
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Tipo de Registro</label>
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Tipo de Lançamento</label>
               <select className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-bold" value={manualEntryData.type} onChange={e => setManualEntryData({...manualEntryData, type: e.target.value})}>
-                <option value="admin_abonada">Falta Abonada (Particular/Gestão)</option>
+                <option value="admin_partial_abono">Abono Parcial de Horas (Minutos/Horas do Dia)</option>
+                <option value="admin_abonada">Falta Abonada (Dia Completo)</option>
                 <option value="admin_excused">Atestado Médico / Licença</option>
                 <option value="admin_vacation">Férias</option>
                 <option value="admin_absence">Falta Injustificada</option>
               </select>
             </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Data Inicial</label>
-              <input type="date" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-black" value={manualEntryData.startDate} onChange={e => setManualEntryData({...manualEntryData, startDate: e.target.value})} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Data Final</label>
-              <input type="date" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-black" value={manualEntryData.endDate} onChange={e => setManualEntryData({...manualEntryData, endDate: e.target.value})} />
-            </div>
+
+            {manualEntryData.type === 'admin_partial_abono' ? (
+              <>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Data do Abono</label>
+                  <input 
+                    type="date" 
+                    className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-black" 
+                    value={manualEntryData.startDate} 
+                    onChange={e => setManualEntryData({...manualEntryData, startDate: e.target.value, endDate: e.target.value})} 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Tempo a Abonar (Horas : Minutos)</label>
+                  <input 
+                    type="time" 
+                    className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-black text-xl text-center font-mono" 
+                    value={manualEntryData.abonoTime || '00:40'} 
+                    onChange={e => setManualEntryData({...manualEntryData, abonoTime: e.target.value})} 
+                  />
+                  <div className="flex flex-wrap gap-1.5 pt-1.5">
+                    {['00:15', '00:30', '00:40', '00:50', '01:00', '01:30', '02:00'].map(preset => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setManualEntryData({...manualEntryData, abonoTime: preset})}
+                        className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border ${
+                          manualEntryData.abonoTime === preset
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-500/20'
+                            : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300 border-black/5 dark:border-white/5 hover:bg-slate-200'
+                        }`}
+                      >
+                        {preset === '00:15' ? '+15m' : preset === '00:30' ? '+30m' : preset === '00:40' ? '+40m' : preset === '00:50' ? '+50m' : preset === '01:00' ? '+1h' : preset === '01:30' ? '+1h30' : '+2h'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Data Inicial</label>
+                  <input type="date" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-black" value={manualEntryData.startDate} onChange={e => setManualEntryData({...manualEntryData, startDate: e.target.value})} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Data Final</label>
+                  <input type="date" className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 font-black" value={manualEntryData.endDate} onChange={e => setManualEntryData({...manualEntryData, endDate: e.target.value})} />
+                </div>
+              </>
+            )}
             <div className="md:col-span-2 space-y-1">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Justificativa / Descrição</label>
-              <input type="text" placeholder="Ex: Apresentou atestado CID..." className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" value={manualEntryData.comment} onChange={e => setManualEntryData({...manualEntryData, comment: e.target.value})} />
+              <input 
+                type="text" 
+                placeholder={manualEntryData.type === 'admin_partial_abono' ? 'Ex: Dispensa antecipada autorizada por instabilidade no sistema...' : 'Ex: Apresentou atestado CID...'} 
+                className="w-full p-4 bg-slate-50 dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-2xl text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" 
+                value={manualEntryData.comment} 
+                onChange={e => setManualEntryData({...manualEntryData, comment: e.target.value})} 
+              />
             </div>
           </div>
           <div className="flex gap-3 pt-4">
@@ -3162,7 +3284,7 @@ function ReportsManager({ employees, departments, onDataChange }) {
                     
                     <div className="flex flex-col md:flex-row items-center gap-2 shrink-0">
                       <span className={`px-4 py-1.5 rounded-xl text-[9px] font-black tracking-widest uppercase text-white ${config.color.split(' ')[0]}`}>{config.label}</span>
-                      {r.type !== 'superseded' && r.type !== 'admin_adjustment' && r.type !== 'admin_absence' && r.type !== 'admin_excused' && r.type !== 'admin_abonada' && r.type !== 'admin_vacation' && (
+                      {r.type !== 'superseded' && r.type !== 'admin_adjustment' && r.type !== 'admin_absence' && r.type !== 'admin_excused' && r.type !== 'admin_abonada' && r.type !== 'admin_partial_abono' && r.type !== 'admin_vacation' && (
                         <div className="flex items-center gap-1.5">
                           <button 
                             onClick={() => setAdjustmentData({ record: r, newTime: format(new Date(r.timestamp), 'HH:mm'), reason: '' })}
@@ -3175,6 +3297,24 @@ function ReportsManager({ employees, departments, onDataChange }) {
                             onClick={() => handleOpenDeleteDayModal(r.employeeId, format(new Date(r.timestamp), 'yyyy-MM-dd'))}
                             className="p-1.5 bg-slate-100 dark:bg-white/5 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
                             title={`Excluir batidas do dia ${format(new Date(r.timestamp), 'dd/MM/yyyy')} e liberar correção`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                      {['admin_partial_abono', 'admin_absence', 'admin_excused', 'admin_abonada', 'admin_vacation'].includes(r.type) && (
+                        <div className="flex items-center gap-1.5">
+                          <button 
+                            onClick={async () => {
+                              if (confirm(`Deseja realmente excluir este lançamento administrativo de ${RECORD_TYPES[r.type]?.label || r.type}?`)) {
+                                await db.records.delete(r.id)
+                                await deleteDocFromFirestore('records', r.id)
+                                loadRecords()
+                                onDataChange()
+                              }
+                            }}
+                            className="p-1.5 bg-slate-100 dark:bg-white/5 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
+                            title="Excluir este lançamento administrativo"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -3431,6 +3571,14 @@ function ReportsManager({ employees, departments, onDataChange }) {
                     const displayStr = cleanComment ? `${time} ${label} (${cleanComment})` : `${time} ${label}`
                     daily[date].extras.push({ timestamp: new Date(r.timestamp).getTime(), text: displayStr })
                   }
+                  if (r.type === 'admin_partial_abono') {
+                    const pMin = Number(r.abonoMinutes) || 0
+                    daily[date].partialAbonoMin = (daily[date].partialAbonoMin || 0) + pMin
+                    const hrs = Math.floor(pMin / 60)
+                    const mins = pMin % 60
+                    const abonoFormatted = `${hrs > 0 ? `${hrs}h ` : ''}${mins.toString().padStart(2, '0')}m`
+                    daily[date].obs.push(`ABONO PARCIAL (+${abonoFormatted}): ${r.comment ? r.comment.toUpperCase() : 'AUTORIZADO PELA GESTÃO'}`)
+                  }
                   if (r.comment) {
                     let obsText = r.comment.toUpperCase()
                     if (obsText.includes('PONTO RETROATIVO') || obsText.includes('LANÇAMENTO RETROATIVO')) {
@@ -3454,6 +3602,16 @@ function ReportsManager({ employees, departments, onDataChange }) {
                 diff -= (lh2 * 60 + lm2) - (lh1 * 60 + lm1)
               }
               if (diff > 0) dailyTotalStr = `${Math.floor(diff/60).toString().padStart(2,'0')}:${(diff%60).toString().padStart(2,'0')}${data.multiplier > 1 ? ` (x${data.multiplier})` : ''}`
+            }
+            if (data.partialAbonoMin > 0) {
+              const hrs = Math.floor(data.partialAbonoMin / 60)
+              const mins = data.partialAbonoMin % 60
+              const abonoFormatted = `${hrs > 0 ? `${hrs}h ` : ''}${mins.toString().padStart(2, '0')}m`
+              if (dailyTotalStr !== '-') {
+                dailyTotalStr += ` [+${abonoFormatted}]`
+              } else {
+                dailyTotalStr = `ABONO (${abonoFormatted})`
+              }
             }
             return (
               <tr key={idx} className="bg-white">

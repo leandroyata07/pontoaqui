@@ -22,6 +22,7 @@ const RECORD_TYPES = {
   system_auto_checkout: { label: 'Saída Automática', icon: LogOut, color: 'bg-red-500' },
   admin_excused: { label: 'Atestado Médico', icon: FileText, color: 'bg-emerald-500' },
   admin_abonada: { label: 'Falta Abonada', icon: CheckCircle2, color: 'bg-teal-500' },
+  admin_partial_abono: { label: 'Abono Parcial de Horas', icon: CheckCircle2, color: 'bg-teal-500' },
   admin_vacation: { label: 'Férias', icon: Calendar, color: 'bg-cyan-500' },
   admin_absence: { label: 'Falta Injustificada', icon: AlertCircle, color: 'bg-rose-500' }
 }
