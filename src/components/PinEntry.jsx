@@ -1822,13 +1822,15 @@ export function PinEntry() {
                     </div>
 
                     <div className="p-4 bg-white/90 dark:bg-black/40 rounded-xl border border-orange-500/20 space-y-3">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Tipo de Registro</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block ml-1 whitespace-nowrap">
+                            Tipo de Registro
+                          </label>
                           <select
                             value={forgottenType}
                             onChange={e => setForgottenType(e.target.value)}
-                            className="w-full p-2.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-bold text-xs outline-none focus:ring-2 focus:ring-orange-500"
+                            className="w-full h-11 px-3.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-bold text-xs outline-none focus:ring-2 focus:ring-orange-500 shadow-sm"
                           >
                             <option value="check_in">Entrada Principal</option>
                             <option value="lunch_in">Retorno Refeição (Volta do Almoço)</option>
@@ -1836,25 +1838,29 @@ export function PinEntry() {
                             <option value="lunch_out">Saída Refeição</option>
                           </select>
                         </div>
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Horário Real em que Chegou</label>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block ml-1 whitespace-nowrap">
+                            Horário Real (Chegada)
+                          </label>
                           <input
                             type="time"
                             value={forgottenTime}
                             onChange={e => setForgottenTime(e.target.value)}
-                            className="w-full p-2 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-black text-base text-center outline-none focus:ring-2 focus:ring-orange-500"
+                            className="w-full h-11 px-3.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white font-black text-sm text-center outline-none focus:ring-2 focus:ring-orange-500 shadow-sm font-mono"
                           />
                         </div>
                       </div>
 
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Justificativa do Esquecimento</label>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block ml-1">
+                          Justificativa do Esquecimento
+                        </label>
                         <input
                           type="text"
                           placeholder="Ex: Cheguei às 08h, fui direto atender cliente e esqueci..."
                           value={forgottenReason}
                           onChange={e => setForgottenReason(e.target.value)}
-                          className="w-full p-2.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-orange-500"
+                          className="w-full h-11 px-3.5 bg-white dark:bg-slate-900 border border-black/10 dark:border-white/10 rounded-xl text-slate-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-orange-500 shadow-sm"
                         />
                       </div>
 
@@ -1994,43 +2000,6 @@ export function PinEntry() {
             </div>
           )}
 
-          {/* Alerta Discreto de Funções Autorizadas pela Administração */}
-          {activeAdminAuthCount > 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => setShowAdminMenuModal(true)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowAdminMenuModal(true) }}
-              className="p-3.5 px-4 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-500/10 border border-amber-500/30 hover:border-amber-500/50 rounded-2xl flex items-center justify-between cursor-pointer transition-all hover:scale-[1.005] active:scale-[0.995] shadow-sm group"
-            >
-              <div className="flex items-center space-x-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white shadow-md shadow-amber-500/20 shrink-0">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div className="truncate">
-                  <div className="flex items-center gap-2">
-                    <span className="font-extrabold text-xs text-slate-900 dark:text-white">
-                      {activeAdminAuthCount} {activeAdminAuthCount === 1 ? 'função autorizada' : 'funções autorizadas'} pela gestão
-                    </span>
-                    <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500 text-white tracking-wider">
-                      Liberado
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-amber-800 dark:text-amber-300 font-medium truncate mt-0.5">
-                    {employee?.allowDayCorrection && employee?.dayCorrectionDate && `Correção do dia ${format(new Date(employee.dayCorrectionDate + 'T12:00:00'), 'dd/MM/yyyy')}`}
-                    {employee?.allowDayCorrection && employee?.dayCorrectionDate && employee?.allowRetroactive && ' • '}
-                    {employee?.allowRetroactive && 'Inclusão de dias anteriores'}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0 ml-3">
-                <span className="text-xs font-black text-amber-600 dark:text-amber-400 group-hover:underline">
-                  Acessar Menu
-                </span>
-                <ChevronRight className="w-4 h-4 text-amber-600 dark:text-amber-400 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-            </div>
-          )}
 
           {/* Banner de Expediente Concluído */}
           {todayRecords.some(r => (r.type === 'check_out' || r.type === 'system_auto_checkout') && r.status !== 'rejected') && (
